@@ -1,13 +1,6 @@
-import ArmoryContainer from "./components/armory/Armory"
-import ComputerContainer from "./components/computer/Computer";
-import DocumentContainer from "./components/document/Document"
-import { GarageContainer } from "./components/garage/Garage";
+import Music from "./components/music/Music";
 import { Config, useConfig } from "./providers/config";
 import { Translate } from "./providers/locale/Locale";
-import ManagementDisplay from "./components/management/Management";
-import Bodycam from "./components/bodycam/Bodycam";
-import Camera from "./components/camera/Camera";
-import FileViewer from "./components/fileviewer/FileViewer";
 
 export function GetItemLabel({item} : {item: string}) {
   const { config } = useConfig();
@@ -57,8 +50,8 @@ export function AppControls({controls} : {controls?: {key: string, label: any}[]
 
 function App() {
   return (
-    <div className="w-screen h-screen absolute text-primary top-0 left-0">
-      < />
+    <div className="w-screen h-screen absolute text-primary top-0 left-0" style={{background: "grey"}}>
+      <Music />
     </div>
   )
 }

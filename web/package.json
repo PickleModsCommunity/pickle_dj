@@ -24,6 +24,7 @@
     "react-quill": "^2.0.0",
     "react-roulette-pro": "^3.2.2",
     "react-sparkle": "^2.0.0",
+    "soundtouchjs": "^0.2.1",
     "tailwind-merge": "^3.0.1",
     "tailwindcss-animate": "^1.0.7"
   },
