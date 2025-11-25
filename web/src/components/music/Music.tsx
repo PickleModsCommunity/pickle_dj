@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-
+import { uploadAudioToFivemanage } from "../../lib/fivemanage";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -20,6 +20,7 @@ type PlaylistItem = {
     sourceType: "url" | "file";
     baseBpm?: number | null;
 };
+
 export default function Music() {
     const [decks, setDecks] = useState<Record<string, Deck>>({});
     const [crossfade, setCrossfade] = useState(0.5); // 0 = left only, 1 = right only
@@ -358,7 +359,9 @@ export default function Music() {
         });
     };
 
-    const [urlInputs, setUrlInputs] = useState<Record<string, string>>({});
+    const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+    const [addDialogDeck, setAddDialogDeck] = useState<"track_1" | "track_2">("track_1");
+    const [addDialogUrl, setAddDialogUrl] = useState("");
 
     // Estimate BPM via simple onset-envelope autocorrelation (downsampled to ~200 Hz)
     function estimateBpmFromBuffer(buffer: AudioBuffer): number | null {
@@ -455,52 +458,7 @@ export default function Music() {
         }
     };
 
-    const onUploadFile = async (deck: string, file: File) => {
-        const d = decks[deck];
-        if (!d?.audio) return;
-        const wasPlaying = d.isPlaying;
-        const nextUrl = URL.createObjectURL(file);
-        if (d.objectUrl) {
-            try { URL.revokeObjectURL(d.objectUrl); } catch {}
-        }
-        d.audio.pause();
-        d.audio.src = nextUrl;
-        d.audio.currentTime = 0;
-        d.audio.loop = true;
-        d.audio.preload = "auto";
-        try {
-            (d.audio as any).preservesPitch = false;
-            (d.audio as any).mozPreservesPitch = false;
-            (d.audio as any).webkitPreservesPitch = false;
-        } catch {}
-        d.audio.load();
-        setDecks(prev => ({
-            ...prev,
-            [deck]: {
-                ...prev[deck],
-                objectUrl: nextUrl,
-                baseBpm: null,
-                currentTime: 0,
-                duration: 0,
-                isPlaying: false,
-            }
-        }));
-        const resumeIfNeeded = async () => {
-            if (wasPlaying) {
-                try { await audioCtxRef.current?.resume?.(); } catch {}
-                try {
-                    await d.audio.play();
-                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
-                } catch {}
-            }
-        };
-        d.audio.addEventListener("canplay", resumeIfNeeded, { once: true });
-
-        const bpm = await analyzeBpmFromBlob(file);
-        if (bpm) {
-            setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], baseBpm: bpm } }));
-        }
-    };
+    // onUploadFile removed; we use addFileToPlaylist in the dialog
 
     const formatTime = (secs?: number) => {
         const s = Math.max(0, Math.floor(secs || 0));
@@ -658,14 +616,263 @@ export default function Music() {
                     gap: 8px;
                     align-items: center;
                 }
+                /* Vertical slider helpers */
+                .vGroup {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 6px;
+                    height: 220px;
+                }
+                .vRange {
+                    -webkit-appearance: slider-vertical; /* Chrome/Edge/Safari */
+                    appearance: auto;
+                    writing-mode: bt-lr; /* Firefox */
+                    width: 100%; /* thickness; keep in sync with thumb width for look */
+                    height: 12px; /* fill the group */
+                    transform: rotate(90deg);
+                    flex: 1; /* take remaining vertical space between label and bottom info */
+                }
+                .vRange.vOpposite {
+                    transform: rotate(-90deg);
+                }
+                /* Custom range styling with image thumb */
+                .range {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    background: transparent;
+                    outline: none;
+                }
+                /* WebKit track */
+                .range::-webkit-slider-runnable-track {
+                    height: 6px;
+                    background: linear-gradient(180deg, #2a2a2a, #1a1a1a);
+                    border-radius: 999px;
+                    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.4);
+                }
+                /* Firefox track */
+                .range::-moz-range-track {
+                    height: 6px;
+                    background: linear-gradient(180deg, #2a2a2a, #1a1a1a);
+                    border-radius: 999px;
+                    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.4);
+                }
+                /* IE/Edge (legacy) track */
+                .range::-ms-track {
+                    height: 6px;
+                    background: transparent;
+                    border-color: transparent;
+                    color: transparent;
+                }
+                .range::-ms-fill-lower,
+                .range::-ms-fill-upper {
+                    background: linear-gradient(180deg, #2a2a2a, #1a1a1a);
+                    border-radius: 999px;
+                    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.4);
+                }
+                /* WebKit thumb */
+                .range::-webkit-slider-thumb {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    width: 12px;
+                    height: 28px;
+                    border: none;
+                    background: url('/nui/images/slider.png') no-repeat center center / contain;
+                    cursor: pointer;
+                    margin-top: -11px; /* centers thumb on 6px track */
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+                }
+                /* Firefox thumb */
+                .range::-moz-range-thumb {
+                    width: 28px;
+                    height: 28px;
+                    border: none;
+                    border-radius: 4px;
+                    background: url('/nui/images/slider.png') no-repeat center center / contain;
+                    cursor: pointer;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+                }
+                /* IE/Edge (legacy) thumb */
+                .range::-ms-thumb {
+                    width: 28px;
+                    height: 28px;
+                    border: none;
+                    border-radius: 4px;
+                    background: url('/nui/images/slider.png') no-repeat center center / contain;
+                    cursor: pointer;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+                }
+                /* Focus styles */
+                .range:focus-visible {
+                    outline: none;
+                }
+                .range:focus::-webkit-slider-runnable-track {
+                    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 0 0 2px rgba(226,61,61,0.25);
+                }
+                .range:focus::-moz-range-track {
+                    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 0 0 2px rgba(226,61,61,0.25);
+                }
+                /* Modal */
+                .modalBackdrop {
+                    position: fixed;
+                    inset: 0;
+                    background: rgba(0,0,0,0.55);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 9999;
+                }
+                .modal {
+                    width: 520px;
+                    max-width: calc(100vw - 32px);
+                    background: #0f0f0f;
+                    color: #eee;
+                    border: 1px solid #333;
+                    border-radius: 10px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+                    padding: 16px;
+                }
+                .modalHeader {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 12px;
+                }
+                .modalBody {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
+                }
+                .modalActions {
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 8px;
+                    margin-top: 8px;
+                }
+                .fieldRow {
+                    display: flex;
+                    gap: 8px;
+                    align-items: center;
+                }
+                .radioRow {
+                    display: flex;
+                    gap: 16px;
+                    align-items: center;
+                }
+                .divider {
+                    height: 1px;
+                    background: #222;
+                    margin: 6px 0;
+                    border: none;
+                }
                 `}
             </style>
             <div style={{ display: "flex", gap: 16 }}>
-                {Object.keys(decks).map((deck) => (
-                    <div className="deck" key={deck}>
-                        <div className="deckRow">
-                            {deck === "track_2" ? (
-                                <>
+                {Object.keys({track_1: decks.track_1, controls: decks.controls, track_2: decks.track_2}).map(function(deck) {
+                    if (deck === "controls") {
+                        return (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
+                            <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
+                                <div className="vGroup">
+                                    <span>Left</span>
+                                    <input
+                                        className="range vRange"
+                                        type="range"
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={Math.round(crossfade * 100)}
+                                        onChange={(e) => setCrossfade(Number(e.target.value) / 100)}
+                                        aria-label="Crossfader"
+                                    />
+                                    <span>Right</span>
+                                    <button
+                                        className="resetBtn"
+                                        onClick={() => setCrossfade(0.5)}
+                                        aria-label="Reset crossfader"
+                                        title="Reset crossfader"
+                                    >
+                                        ↺
+                                    </button>
+                                </div>
+                                <div className="vGroup">
+                                    <span>Master</span>
+                                    <input
+                                        className="range vRange vOpposite"
+                                        type="range"
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={Math.round(masterVolume * 100)}
+                                        onChange={(e) => setMasterVolume(Number(e.target.value) / 100)}
+                                        aria-label="Master volume"
+                                    />
+                                    <span>{Math.round(masterVolume * 100)}%</span>
+                                    <button
+                                        className="resetBtn"
+                                        onClick={() => setMasterVolume(0.6)}
+                                        aria-label="Reset master volume"
+                                        title="Reset master volume"
+                                    >
+                                        ↺
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="mixerRow" style={{ gap: 12, justifyContent: "center" }}>
+                                <button
+                                    className="resetBtn"
+                                    onClick={() => { setIsAddDialogOpen(true); }}
+                                    aria-label="Add Song to Playlist"
+                                    title="Add Song to Playlist"
+                                >
+                                    Add Song to Playlist
+                                </button>
+                            </div>
+                            <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
+                                {Object.keys(decks).map(function(deck) {
+                                    return (
+                                        <div className="playlistCol">
+                                            <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", alignItems: "stretch" }}>
+                                                {(decks[deck].playlist ?? []).map(item => (
+                                                    <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%" }}>
+                                                        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                                                            <div style={{ width: 6, height: 6, borderRadius: 999, background: decks[deck].currentItemId === item.id ? "#60d394" : "#555" }} />
+                                                            <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>{item.title}</div>
+                                                            {typeof item.baseBpm === "number" ? (
+                                                                <span style={{ opacity: 0.7, fontSize: 12 }}>• {item.baseBpm.toFixed(0)} BPM</span>
+                                                            ) : (
+                                                                <span style={{ opacity: 0.5, fontSize: 12 }}>• analyzing…</span>
+                                                            )}
+                                                        </div>
+                                                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                                            <button
+                                                                className="resetBtn"
+                                                                onClick={() => loadPlaylistItem(deck, item.id)}
+                                                                title="Load"
+                                                            >
+                                                                Load
+                                                            </button>
+                                                            <button
+                                                                className="resetBtn"
+                                                                onClick={() => removePlaylistItem(deck, item.id)}
+                                                                title="Remove"
+                                                            >
+                                                                ✕
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        )
+                    } else {
+                        return (
+                            <div className="deck" key={deck}>
+                                <div className="deckRow">
                                     <div className="controlsCol">
                                         <div
                                             className={`vinyl ${decks[deck].isPlaying ? "spinning playing" : ""}`}
@@ -724,310 +931,58 @@ export default function Music() {
                                             />
                                             <span>{formatTime(decks[deck].duration)}</span>
                                         </div>
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
-                                            <span>Tempo</span>
-                                            <input
-                                                className="range"
-                                                type="range"
-                                                min={50}
-                                                max={150}
-                                                step={1}
-                                                value={Math.round(decks[deck].tempo * 100)}
-                                                onChange={(e) => { 
-                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: Number(e.target.value) / 100 } }));
-                                                }}
-                                                aria-label={`${deck} tempo`}
-                                            />
-                                            <span>{Math.round(decks[deck].tempo * 100)}%</span>
-                                            <button
-                                                className="resetBtn"
-                                                onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: 1 } }))}
-                                                aria-label={`${deck} reset tempo`}
-                                                title="Reset tempo"
-                                            >
-                                                ↺
-                                            </button>
-                                        </div>
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
-                                            <span>Volume</span>
-                                            <input
-                                                className="range"
-                                                type="range"
-                                                min={0}
-                                                max={100}
-                                                step={1}
-                                                value={Math.round((decks[deck].deckVolume ?? 1) * 100)}
-                                                onChange={(e) => {
-                                                    const v = Number(e.target.value) / 100;
-                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: v } }));
-                                                }}
-                                                aria-label={`${deck} volume`}
-                                            />
-                                            <span>{Math.round((decks[deck].deckVolume ?? 1) * 100)}%</span>
-                                            <button
-                                                className="resetBtn"
-                                                onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: 1 } }))}
-                                                aria-label={`${deck} reset volume`}
-                                                title="Reset volume"
-                                            >
-                                                ↺
-                                            </button>
-                                        </div>
-                                        <div className="controls">
-                                            <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                        <div className="controls" style={{ width: "100%", justifyContent: "center", gap: 24 }}>
+                                            <div className="vGroup">
+                                                <span>Tempo</span>
                                                 <input
-                                                    type="checkbox"
-                                                    checked={monitorDeck === deck}
-                                                    onChange={(e) => {
-                                                        if (e.target.checked) {
-                                                            setMonitorDeck(deck);
-                                                            audioCtxRef.current?.resume?.();
-                                                        } else if (monitorDeck === deck) {
-                                                            setMonitorDeck(null);
-                                                        }
+                                                    className="range vRange"
+                                                    type="range"
+                                                    min={50}
+                                                    max={150}
+                                                    step={1}
+                                                    value={Math.round(decks[deck].tempo * 100)}
+                                                    onChange={(e) => { 
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: Number(e.target.value) / 100 } }));
                                                     }}
+                                                    aria-label={`${deck} tempo`}
                                                 />
-                                                <span>Monitor</span>
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div className="playlistCol">
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
-                                            <input
-                                                type="text"
-                                                placeholder="Add track URL"
-                                                value={urlInputs[deck] ?? ""}
-                                                onChange={(e) => setUrlInputs(prev => ({ ...prev, [deck]: e.target.value }))}
-                                                style={{ width: "220px", padding: "4px 6px", borderRadius: 4, border: "1px solid #555", background: "#111", color: "#eee" }}
-                                                aria-label={`${deck} add url`}
-                                            />
-                                            <button
-                                                className="resetBtn"
-                                                onClick={() => { const v = (urlInputs[deck] ?? "").trim(); if (v) { addUrlToPlaylist(deck, v); setUrlInputs(prev => ({ ...prev, [deck]: "" })); } }}
-                                                title="Add URL"
-                                            >
-                                                Add
-                                            </button>
-                                            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginLeft: 8 }}>
+                                                <span>{Math.round(decks[deck].tempo * 100)}%</span>
+                                                <button
+                                                    className="resetBtn"
+                                                    onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: 1 } }))}
+                                                    aria-label={`${deck} reset tempo`}
+                                                    title="Reset tempo"
+                                                >
+                                                    ↺
+                                                </button>
+                                            </div>
+                                            <div className="vGroup">
+                                                <span>Volume</span>
                                                 <input
-                                                    type="file"
-                                                    accept="audio/*"
-                                                    style={{ display: "none" }}
+                                                    className="range vRange"
+                                                    type="range"
+                                                    min={0}
+                                                    max={100}
+                                                    step={1}
+                                                    value={Math.round((decks[deck].deckVolume ?? 1) * 100)}
                                                     onChange={(e) => {
-                                                        const file = e.target.files?.[0];
-                                                        if (file) addFileToPlaylist(deck, file);
-                                                        e.currentTarget.value = "";
+                                                        const v = Number(e.target.value) / 100;
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: v } }));
                                                     }}
+                                                    aria-label={`${deck} volume`}
                                                 />
-                                                <span style={{ padding: "4px 8px", border: "1px solid #555", borderRadius: 4 }}>Add File</span>
-                                            </label>
-                                        </div>
-                                        <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", alignItems: "stretch" }}>
-                                            {(decks[deck].playlist ?? []).map(item => (
-                                                <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%" }}>
-                                                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                                                        <div style={{ width: 6, height: 6, borderRadius: 999, background: decks[deck].currentItemId === item.id ? "#60d394" : "#555" }} />
-                                                        <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>{item.title}</div>
-                                                        {typeof item.baseBpm === "number" ? (
-                                                            <span style={{ opacity: 0.7, fontSize: 12 }}>• {item.baseBpm.toFixed(0)} BPM</span>
-                                                        ) : (
-                                                            <span style={{ opacity: 0.5, fontSize: 12 }}>• analyzing…</span>
-                                                        )}
-                                                    </div>
-                                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                                        <button
-                                                            className="resetBtn"
-                                                            onClick={() => loadPlaylistItem(deck, item.id)}
-                                                            title="Load"
-                                                        >
-                                                            Load
-                                                        </button>
-                                                        <button
-                                                            className="resetBtn"
-                                                            onClick={() => removePlaylistItem(deck, item.id)}
-                                                            title="Remove"
-                                                        >
-                                                            ✕
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </>
-                            ) : (
-                                <>
-                                    <div className="playlistCol">
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
-                                            <input
-                                                type="text"
-                                                placeholder="Add track URL"
-                                                value={urlInputs[deck] ?? ""}
-                                                onChange={(e) => setUrlInputs(prev => ({ ...prev, [deck]: e.target.value }))}
-                                                style={{ width: "220px", padding: "4px 6px", borderRadius: 4, border: "1px solid #555", background: "#111", color: "#eee" }}
-                                                aria-label={`${deck} add url`}
-                                            />
-                                            <button
-                                                className="resetBtn"
-                                                onClick={() => { const v = (urlInputs[deck] ?? "").trim(); if (v) { addUrlToPlaylist(deck, v); setUrlInputs(prev => ({ ...prev, [deck]: "" })); } }}
-                                                title="Add URL"
-                                            >
-                                                Add
-                                            </button>
-                                            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginLeft: 8 }}>
-                                                <input
-                                                    type="file"
-                                                    accept="audio/*"
-                                                    style={{ display: "none" }}
-                                                    onChange={(e) => {
-                                                        const file = e.target.files?.[0];
-                                                        if (file) addFileToPlaylist(deck, file);
-                                                        e.currentTarget.value = "";
-                                                    }}
-                                                />
-                                                <span style={{ padding: "4px 8px", border: "1px solid #555", borderRadius: 4 }}>Add File</span>
-                                            </label>
-                                        </div>
-                                        <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", alignItems: "stretch" }}>
-                                            {(decks[deck].playlist ?? []).map(item => (
-                                                <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%" }}>
-                                                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                                                        <div style={{ width: 6, height: 6, borderRadius: 999, background: decks[deck].currentItemId === item.id ? "#60d394" : "#555" }} />
-                                                        <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>{item.title}</div>
-                                                        {typeof item.baseBpm === "number" ? (
-                                                            <span style={{ opacity: 0.7, fontSize: 12 }}>• {item.baseBpm.toFixed(0)} BPM</span>
-                                                        ) : (
-                                                            <span style={{ opacity: 0.5, fontSize: 12 }}>• analyzing…</span>
-                                                        )}
-                                                    </div>
-                                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                                        <button
-                                                            className="resetBtn"
-                                                            onClick={() => loadPlaylistItem(deck, item.id)}
-                                                            title="Load"
-                                                        >
-                                                            Load
-                                                        </button>
-                                                        <button
-                                                            className="resetBtn"
-                                                            onClick={() => removePlaylistItem(deck, item.id)}
-                                                            title="Remove"
-                                                        >
-                                                            ✕
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    <div className="controlsCol">
-                                        <div
-                                            className={`vinyl ${decks[deck].isPlaying ? "spinning playing" : ""}`}
-                                            onClick={() => toggleDeck(deck)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === "Enter" || e.key === " ") {
-                                                    e.preventDefault();
-                                                    toggleDeck(deck);
-                                                }
-                                            }}
-                                            role="button"
-                                            aria-label={decks[deck].isPlaying ? "Pause deck" : "Play deck"}
-                                            tabIndex={0}
-                                        >
-                                            <div className="wobbleMask" />
-                                            <div className="vinylOverlay" style={{ zIndex: 10 }}>
-                                                {decks[deck].isPlaying ? (
-                                                    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
-                                                        <rect x="5" y="4" width="5" height="16" rx="1" fill="currentColor"></rect>
-                                                        <rect x="14" y="4" width="5" height="16" rx="1" fill="currentColor"></rect>
-                                                    </svg>
-                                                ) : (
-                                                    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
-                                                        <path d="M8 5v14l11-7z" fill="currentColor"></path>
-                                                    </svg>
-                                                )}
+                                                <span>{Math.round((decks[deck].deckVolume ?? 1) * 100)}%</span>
+                                                <button
+                                                    className="resetBtn"
+                                                    onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: 1 } }))}
+                                                    aria-label={`${deck} reset volume`}
+                                                    title="Reset volume"
+                                                >
+                                                    ↺
+                                                </button>
                                             </div>
                                         </div>
                                         <div className="controls">
-                                            <span>BPM:</span>
-                                            <strong>
-                                                {decks[deck].baseBpm
-                                                    ? (decks[deck].baseBpm * decks[deck].tempo).toFixed(2)
-                                                    : "—"}
-                                            </strong>
-                                            {decks[deck].baseBpm ? (
-                                                <span style={{ opacity: 0.7 }}> (base {decks[deck].baseBpm.toFixed(2)})</span>
-                                            ) : null}
-                                        </div>
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
-                                            <span>{formatTime(decks[deck].currentTime)}</span>
-                                            <input
-                                                className="range"
-                                                type="range"
-                                                min={0}
-                                                max={Math.max(0, decks[deck].duration || 0)}
-                                                step={0.01}
-                                                value={Math.min(decks[deck].currentTime || 0, decks[deck].duration || 0)}
-                                                onChange={(e) => {
-                                                    const to = Number(e.target.value);
-                                                    decks[deck].audio.currentTime = to;
-                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
-                                                }}
-                                                aria-label={`${deck} position`}
-                                                disabled={!decks[deck].duration || decks[deck].duration === 0}
-                                            />
-                                            <span>{formatTime(decks[deck].duration)}</span>
-                                        </div>
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
-                                            <span>Tempo</span>
-                                            <input
-                                                className="range"
-                                                type="range"
-                                                min={50}
-                                                max={150}
-                                                step={1}
-                                                value={Math.round(decks[deck].tempo * 100)}
-                                                onChange={(e) => { 
-                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: Number(e.target.value) / 100 } }));
-                                                }}
-                                                aria-label={`${deck} tempo`}
-                                            />
-                                            <span>{Math.round(decks[deck].tempo * 100)}%</span>
-                                            <button
-                                                className="resetBtn"
-                                                onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: 1 } }))}
-                                                aria-label={`${deck} reset tempo`}
-                                                title="Reset tempo"
-                                            >
-                                                ↺
-                                            </button>
-                                        </div>
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
-                                            <span>Volume</span>
-                                            <input
-                                                className="range"
-                                                type="range"
-                                                min={0}
-                                                max={100}
-                                                step={1}
-                                                value={Math.round((decks[deck].deckVolume ?? 1) * 100)}
-                                                onChange={(e) => {
-                                                    const v = Number(e.target.value) / 100;
-                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: v } }));
-                                                }}
-                                                aria-label={`${deck} volume`}
-                                            />
-                                            <span>{Math.round((decks[deck].deckVolume ?? 1) * 100)}%</span>
-                                            <button
-                                                className="resetBtn"
-                                                onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: 1 } }))}
-                                                aria-label={`${deck} reset volume`}
-                                                title="Reset volume"
-                                            >
-                                                ↺
-                                            </button>
-                                        </div>
-                                        <div className="controls">
                                             <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                                 <input
                                                     type="checkbox"
@@ -1045,58 +1000,94 @@ export default function Music() {
                                             </label>
                                         </div>
                                     </div>
-                                </>
-                            )}
+                                </div>
+                            </div>
+                        );
+                    }
+                })}
+            </div>
+            {isAddDialogOpen && (
+                <div className="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="add-song-title">
+                    <div className="modal">
+                        <div className="modalHeader">
+                            <h3 id="add-song-title" style={{ margin: 0, fontSize: 16 }}>Add Song to Playlist</h3>
+                            <button className="resetBtn" onClick={() => setIsAddDialogOpen(false)} aria-label="Close add song dialog">✕</button>
+                        </div>
+                        <div className="modalBody">
+                            <div className="radioRow" role="group" aria-label="Choose target deck">
+                                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <input
+                                        type="radio"
+                                        name="deckPick"
+                                        checked={addDialogDeck === "track_1"}
+                                        onChange={() => setAddDialogDeck("track_1")}
+                                    />
+                                    <span>Left Deck</span>
+                                </label>
+                                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <input
+                                        type="radio"
+                                        name="deckPick"
+                                        checked={addDialogDeck === "track_2"}
+                                        onChange={() => setAddDialogDeck("track_2")}
+                                    />
+                                    <span>Right Deck</span>
+                                </label>
+                            </div>
+                            <hr className="divider" />
+                            <div>
+                                <div style={{ marginBottom: 4, opacity: 0.8 }}>From URL</div>
+                                <div className="fieldRow">
+                                    <input
+                                        type="text"
+                                        placeholder="https://example.com/track.mp3"
+                                        value={addDialogUrl}
+                                        onChange={(e) => setAddDialogUrl(e.target.value)}
+                                        style={{ flex: 1, padding: "6px 8px", borderRadius: 6, border: "1px solid #333", background: "#0c0c0c", color: "#eee" }}
+                                        aria-label="Song URL"
+                                    />
+                                    <button
+                                        className="resetBtn"
+                                        onClick={async () => {
+                                            const url = addDialogUrl.trim();
+                                            if (!url) return;
+                                            await addUrlToPlaylist(addDialogDeck, url);
+                                            setAddDialogUrl("");
+                                            setIsAddDialogOpen(false);
+                                        }}
+                                        disabled={!addDialogUrl.trim()}
+                                        aria-label="Add URL to playlist"
+                                    >
+                                        Add URL
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <div style={{ marginBottom: 4, opacity: 0.8 }}>Upload File</div>
+                                <label className="resetBtn" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                    <input
+                                        type="file"
+                                        accept="audio/*"
+                                        style={{ display: "none" }}
+                                        onChange={async (e) => {
+                                            const file = e.target.files?.[0];
+                                            if (file) {
+                                                await addFileToPlaylist(addDialogDeck, file);
+                                                setIsAddDialogOpen(false);
+                                            }
+                                            if (e.currentTarget) e.currentTarget.value = "";
+                                        }}
+                                    />
+                                    <span>Choose File…</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div className="modalActions">
+                            <button className="resetBtn" onClick={() => setIsAddDialogOpen(false)}>Close</button>
                         </div>
                     </div>
-                ))}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
-                <div className="mixerRow">
-                    <span>Left</span>
-                    <input
-                        className="range"
-                        type="range"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={Math.round(crossfade * 100)}
-                        onChange={(e) => setCrossfade(Number(e.target.value) / 100)}
-                        aria-label="Crossfader"
-                    />
-                    <span>Right</span>
-                    <button
-                        className="resetBtn"
-                        onClick={() => setCrossfade(0.5)}
-                        aria-label="Reset crossfader"
-                        title="Reset crossfader"
-                    >
-                        ↺
-                    </button>
                 </div>
-                <div className="mixerRow">
-                    <span>Master</span>
-                    <input
-                        className="range"
-                        type="range"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={Math.round(masterVolume * 100)}
-                        onChange={(e) => setMasterVolume(Number(e.target.value) / 100)}
-                        aria-label="Master volume"
-                    />
-                    <span>{Math.round(masterVolume * 100)}%</span>
-                    <button
-                        className="resetBtn"
-                        onClick={() => setMasterVolume(0.6)}
-                        aria-label="Reset master volume"
-                        title="Reset master volume"
-                    >
-                        ↺
-                    </button>
-                </div>
-            </div>
+            )}
         </div>
     ) : null;
 }
