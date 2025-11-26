@@ -230,7 +230,7 @@ export default function Music() {
     };
 
     const addUrlToPlaylist = async (deck: string, url: string) => {
-        const youtubeAudioUrl = await requestYoutubeAudio(url) as string;
+        const youtubeAudioUrl = await requestYoutubeAudio(url.split("v=")[1]) as string;
         console.log("RES", youtubeAudioUrl);
         const item: PlaylistItem = {
             id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,

@@ -10,7 +10,7 @@ export function requestYoutubeAudio(videoId: string) {
         }
     });
 
-    xhr.open('GET', 'https://youtube-mp36.p.rapidapi.com/dl?id=UxxajLWwzqY');
+    xhr.open('GET', 'https://youtube-mp36.p.rapidapi.com/dl?id=' + videoId);
     xhr.setRequestHeader('x-rapidapi-key', '653143bc39mshb7de6b5c6a7fe0bp15d62cjsne8faac1aa59a');
     xhr.setRequestHeader('x-rapidapi-host', 'youtube-mp36.p.rapidapi.com');
     return new Promise((resolve, reject) => {
