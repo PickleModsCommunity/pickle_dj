@@ -1,4 +1,5 @@
-import Music from "./components/music/Music";
+import MusicController from "./components/music/MusicController";
+import MusicPlayer from "./components/music/MusicPlayer";
 import { Config, useConfig } from "./providers/config";
 import { Translate } from "./providers/locale/Locale";
 
@@ -51,7 +52,8 @@ export function AppControls({controls} : {controls?: {key: string, label: any}[]
 function App() {
   return (
     <div className="dark w-screen h-screen absolute text-primary top-0 left-0" style={{background: "grey"}}>
-      <Music />
+      <MusicController />
+      <MusicPlayer />
     </div>
   )
 }

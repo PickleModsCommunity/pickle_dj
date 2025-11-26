@@ -21,7 +21,7 @@ type PlaylistItem = {
     youtubeId?: string;
 };
 
-export default function Music() {
+export default function MusicController() {
     const [decks, setDecks] = useState<Record<string, Deck>>({});
     const [crossfade, setCrossfade] = useState(0.5); // 0 = left only, 1 = right only
     const [masterVolume, setMasterVolume] = useState(0.6); // overall gain cap
@@ -29,6 +29,12 @@ export default function Music() {
     // Web Audio routing
     const audioCtxRef = useRef<AudioContext | null>(null);
     const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode }>>({});
+    const masterBusRef = useRef<GainNode | null>(null);
+    const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const streamIdRef = useRef<string | null>(null);
+    const seqRef = useRef<number>(0);
+    const [isBroadcasting, setIsBroadcasting] = useState(false);
 
     // YouTube players per deck
     const ytPlayersRef = useRef<Record<string, any>>({});
@@ -97,11 +103,23 @@ export default function Music() {
         const ctx: AudioContext = audioCtxRef.current ?? new AudioCtx();
         audioCtxRef.current = ctx;
 
+        // Create master bus and a stream tap
+        const masterBus = ctx.createGain();
+        masterBus.gain.value = 1.0;
+        masterBus.connect(ctx.destination);
+        masterBusRef.current = masterBus;
+        try {
+            const streamDest = ctx.createMediaStreamDestination();
+            streamDestRef.current = streamDest;
+            masterBus.connect(streamDest);
+        } catch {}
+
         const makeChain = (el: HTMLAudioElement) => {
             const source = ctx.createMediaElementSource(el);
             const gain = ctx.createGain();
             const panner = ctx.createStereoPanner();
-            source.connect(gain).connect(panner).connect(ctx.destination);
+            // Route each deck into the master bus (which also feeds ctx.destination)
+            source.connect(gain).connect(panner).connect(masterBus);
             return { source, gain, panner };
         };
 
@@ -148,6 +166,106 @@ export default function Music() {
             cancelled = true;
         };
     }, []);
+
+    // Expose helpers for debugging / programmatic access
+    useEffect(() => {
+        (window as any).__getMusicAudioContext = () => audioCtxRef.current;
+        (window as any).__getMusicMixStream = () => streamDestRef.current?.stream ?? null;
+    }, []);
+
+    // NUI helpers
+    const getParentResource = (): string => {
+        try {
+            const fn = (window as any).GetParentResourceName;
+            if (typeof fn === "function") return fn();
+        } catch {}
+        return "nui-resource";
+    };
+    const nuiPost = async (name: string, data?: any) => {
+        const resource = getParentResource();
+        try {
+            await fetch(`https://${resource}/${name}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json; charset=utf-8" },
+                body: JSON.stringify(data ?? {}),
+            });
+        } catch {}
+    };
+
+    const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+        let binary = "";
+        const bytes = new Uint8Array(buffer);
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as unknown as number[]);
+        }
+        return btoa(binary);
+    };
+
+    const startBroadcast = async () => {
+        if (isBroadcasting) return;
+        const ctx = audioCtxRef.current;
+        const streamNode = streamDestRef.current;
+        if (!ctx || !streamNode) return;
+        try { await ctx.resume?.(); } catch {}
+
+        const preferredTypes = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/ogg;codecs=opus",
+        ];
+        let mimeType = "";
+        for (const t of preferredTypes) {
+            if ((window as any).MediaRecorder && (window as any).MediaRecorder.isTypeSupported?.(t)) {
+                mimeType = t;
+                break;
+            }
+        }
+        if (!mimeType) {
+            // Fall back; most CEF/Chromium in FiveM supports webm/opus
+            mimeType = "audio/webm;codecs=opus";
+        }
+
+        const mr = new MediaRecorder(streamNode.stream, { mimeType });
+        mediaRecorderRef.current = mr;
+        const streamId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        streamIdRef.current = streamId;
+        seqRef.current = 0;
+
+        await nuiPost("music_stream_start", { streamId, mimeType });
+
+        mr.ondataavailable = async (ev: BlobEvent) => {
+            if (!ev.data || ev.data.size === 0) return;
+            try {
+                const buf = await ev.data.arrayBuffer();
+                const b64 = arrayBufferToBase64(buf);
+                const seq = seqRef.current++;
+                await nuiPost("music_stream_chunk", {
+                    streamId,
+                    seq,
+                    mimeType,
+                    base64: b64,
+                });
+            } catch {}
+        };
+        mr.onstop = async () => {
+            await nuiPost("music_stream_stop", { streamId });
+        };
+        // 1000ms timeslice to emit chunks roughly every second
+        mr.start(1000);
+        setIsBroadcasting(true);
+    };
+
+    const stopBroadcast = async () => {
+        setIsBroadcasting(false);
+        try {
+            const mr = mediaRecorderRef.current;
+            if (mr && mr.state !== "inactive") {
+                mr.stop();
+            }
+        } catch {}
+        mediaRecorderRef.current = null;
+    };
 
     // Load YouTube IFrame API once
     useEffect(() => {
@@ -1085,6 +1203,27 @@ export default function Music() {
                                     Add Song to Playlist
                                 </button>
                             </div>
+                            <div className="mixerRow" style={{ gap: 12, justifyContent: "center" }}>
+                                {!isBroadcasting ? (
+                                    <button
+                                        className="resetBtn"
+                                        onClick={startBroadcast}
+                                        aria-label="Start broadcasting mix to clients"
+                                        title="Start broadcasting mix to clients"
+                                    >
+                                        Start Broadcast
+                                    </button>
+                                ) : (
+                                    <button
+                                        className="resetBtn"
+                                        onClick={stopBroadcast}
+                                        aria-label="Stop broadcasting"
+                                        title="Stop broadcasting"
+                                    >
+                                        Stop Broadcast
+                                    </button>
+                                )}
+                            </div>
                             <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
                                 {Object.keys(decks).map(function(deck) {
                                     return (
@@ -1159,15 +1298,10 @@ export default function Music() {
                                             </div>
                                         </div>
                                         <div className="controls">
-                                            <span>BPM:</span>
-                                            <strong>
-                                                {decks[deck].baseBpm
-                                                    ? (decks[deck].baseBpm * decks[deck].tempo).toFixed(2)
-                                                    : "—"}
+                                            <span>Now Playing:</span>
+                                            <strong style={{ maxWidth: 220, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                                {decks[deck].playlist?.find(x => x.id === decks[deck].currentItemId)?.title || "—"}
                                             </strong>
-                                            {decks[deck].baseBpm ? (
-                                                <span style={{ opacity: 0.7 }}> (base {decks[deck].baseBpm.toFixed(2)})</span>
-                                            ) : null}
                                         </div>
                                         <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
                                             <span>{formatTime(decks[deck].currentTime)}</span>
@@ -1214,7 +1348,11 @@ export default function Music() {
                                                     }}
                                                     aria-label={`${deck} tempo`}
                                                 />
-                                                <span>{Math.round(decks[deck].tempo * 100)}%</span>
+                                                <span>
+                                                    {decks[deck].baseBpm
+                                                        ? `${(decks[deck].baseBpm * decks[deck].tempo).toFixed(2)} BPM`
+                                                        : "—"}
+                                                </span>
                                                 <button
                                                     className="resetBtn"
                                                     onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: 1 } }))}
