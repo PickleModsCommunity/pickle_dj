@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { uploadAudioToFivemanage } from "../../lib/fivemanage";
+import { requestYoutubeAudio } from "@/lib/audioTransfer";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -230,10 +230,11 @@ export default function Music() {
     };
 
     const addUrlToPlaylist = async (deck: string, url: string) => {
+        const youtubeAudioUrl = await requestYoutubeAudio(url) as string;
         const item: PlaylistItem = {
             id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-            title: deriveTitleFromUrlOrName(url),
-            src: url,
+            title: deriveTitleFromUrlOrName(youtubeAudioUrl),
+            src: youtubeAudioUrl,
             sourceType: "url",
             baseBpm: null,
         };
@@ -241,7 +242,7 @@ export default function Music() {
             const list = prev[deck]?.playlist || [];
             return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
         });
-        const bpm = await analyzeBpmForUrl(url);
+        const bpm = await analyzeBpmForUrl(youtubeAudioUrl);
         if (bpm) {
             setDecks(prev => {
                 const list = prev[deck]?.playlist || [];
