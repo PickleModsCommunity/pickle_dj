@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { requestYoutubeAudio } from "@/lib/audioTransfer";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -17,8 +16,9 @@ type PlaylistItem = {
     id: string;
     title: string;
     src: string; // url or object URL
-    sourceType: "url" | "file";
+    sourceType: "url" | "file" | "youtube";
     baseBpm?: number | null;
+    youtubeId?: string;
 };
 
 export default function Music() {
@@ -29,6 +29,11 @@ export default function Music() {
     // Web Audio routing
     const audioCtxRef = useRef<AudioContext | null>(null);
     const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode }>>({});
+
+    // YouTube players per deck
+    const ytPlayersRef = useRef<Record<string, any>>({});
+    const ytReadyRef = useRef<boolean>(false);
+    const ytTimersRef = useRef<Record<string, number | null>>({});
 
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
@@ -144,6 +149,25 @@ export default function Music() {
         };
     }, []);
 
+    // Load YouTube IFrame API once
+    useEffect(() => {
+        if ((window as any).YT && (window as any).YT.Player) {
+            ytReadyRef.current = true;
+            return;
+        }
+        const tag = document.createElement("script");
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScriptTag = document.getElementsByTagName("script")[0];
+        if (firstScriptTag && firstScriptTag.parentNode) {
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+        } else {
+            document.body.appendChild(tag);
+        }
+        (window as any).onYouTubeIframeAPIReady = () => {
+            ytReadyRef.current = true;
+        };
+    }, []);
+
     // Apply equal-power crossfade to gain nodes; also apply playbackRate
     useEffect(() => {
         if (!decks.track_1?.audio || !decks.track_2?.audio) return;
@@ -185,6 +209,57 @@ export default function Music() {
         monitored.panner.pan.value = isFirst ? -1 : 1;
         other.panner.pan.value = isFirst ? 1 : -1;
     }, [monitorDeck]);
+
+    // Apply volume to YouTube players to approximate crossfade/mix
+    useEffect(() => {
+        const applyVol = (deck: "track_1" | "track_2") => {
+            const player = ytPlayersRef.current[deck];
+            if (!player || typeof player.setVolume !== "function") return;
+            const vol = decks[deck]?.deckVolume ?? 1;
+            let out = 0;
+            if (monitorDeck) {
+                out = Math.max(0, Math.min(1, 0.5 * masterVolume * vol));
+            } else {
+                const theta = crossfade * 0.5 * Math.PI;
+                const leftGain = Math.cos(theta);
+                const rightGain = Math.sin(theta);
+                const gain = deck === "track_1" ? leftGain : rightGain;
+                out = Math.max(0, Math.min(1, gain * masterVolume * vol));
+            }
+            player.setVolume(Math.round(out * 100));
+        };
+        if (decks.track_1) applyVol("track_1");
+        if (decks.track_2) applyVol("track_2");
+    }, [decks, crossfade, masterVolume, monitorDeck]);
+
+    // Map deck tempo to nearest YouTube playback rate when a YouTube item is active
+    useEffect(() => {
+        const applyRate = (deck: "track_1" | "track_2") => {
+            const d = decks[deck];
+            if (!d) return;
+            const currentItem = d.playlist?.find(x => x.id === d.currentItemId);
+            if (currentItem?.sourceType !== "youtube") return;
+            const player = ytPlayersRef.current[deck];
+            if (!player || typeof player.setPlaybackRate !== "function") return;
+            let rates: number[] = [];
+            try {
+                rates = player.getAvailablePlaybackRates?.() || [];
+            } catch {
+                rates = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            }
+            if (!rates || rates.length === 0) rates = [0.25, 0.5, 1, 1.5, 2];
+            const desired = d.tempo; // 0.5..1.5
+            let closest = rates[0];
+            let diff = Math.abs(closest - desired);
+            for (const r of rates) {
+                const nd = Math.abs(r - desired);
+                if (nd < diff) { closest = r; diff = nd; }
+            }
+            try { player.setPlaybackRate(closest); } catch {}
+        };
+        applyRate("track_1");
+        applyRate("track_2");
+    }, [decks.track_1?.tempo, decks.track_2?.tempo, decks.track_1?.currentItemId, decks.track_2?.currentItemId]);
 
     // --- BPM Analysis Utilities ---
     async function analyzeBpmForUrl(url: string): Promise<number | null> {
@@ -229,13 +304,54 @@ export default function Music() {
         }
     };
 
+    const parseYouTubeId = (url: string): string | null => {
+        try {
+            const u = new URL(url);
+            if (u.hostname.includes("youtube.com")) {
+                if (u.pathname === "/watch") {
+                    return u.searchParams.get("v");
+                }
+                const parts = u.pathname.split("/").filter(Boolean);
+                // /shorts/VIDEOID or /embed/VIDEOID
+                if (parts[0] === "shorts" || parts[0] === "embed" || parts[0] === "live") {
+                    return parts[1] || null;
+                }
+            }
+            if (u.hostname.includes("youtu.be")) {
+                const parts = u.pathname.split("/").filter(Boolean);
+                return parts[0] || null;
+            }
+        } catch {}
+        return null;
+    };
+
+	const fetchYoutubeTitle = async (videoId: string): Promise<string | null> => {
+		try {
+			const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
+			const res = await fetch(url);
+			if (!res.ok) return null;
+			const data = await res.json();
+			const t = (data && typeof data.title === "string") ? (data.title as string) : null;
+			return t ?? null;
+		} catch {
+			return null;
+		}
+	};
+
     const addUrlToPlaylist = async (deck: string, url: string) => {
-        const youtubeAudioUrl = await requestYoutubeAudio(url.split("v=")[1]) as string;
-        console.log("RES", youtubeAudioUrl);
-        const item: PlaylistItem = {
+        const ytId = parseYouTubeId(url);
+		const ytTitle = ytId ? await fetchYoutubeTitle(ytId) : null;
+		const item: PlaylistItem = ytId ? {
             id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-            title: deriveTitleFromUrlOrName(youtubeAudioUrl),
-            src: youtubeAudioUrl,
+			title: ytTitle ?? deriveTitleFromUrlOrName(url),
+            src: url,
+            sourceType: "youtube",
+            baseBpm: null,
+            youtubeId: ytId,
+        } : {
+            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            title: deriveTitleFromUrlOrName(url),
+            src: url,
             sourceType: "url",
             baseBpm: null,
         };
@@ -243,7 +359,10 @@ export default function Music() {
             const list = prev[deck]?.playlist || [];
             return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
         });
-        const bpm = await analyzeBpmForUrl(youtubeAudioUrl);
+        let bpm: number | null = null;
+        if (item.sourceType !== "youtube") {
+            bpm = await analyzeBpmForUrl(url);
+        }
         if (bpm) {
             setDecks(prev => {
                 const list = prev[deck]?.playlist || [];
@@ -288,61 +407,184 @@ export default function Music() {
         const item = d.playlist?.find(x => x.id === itemId);
         if (!item) return;
         const wasPlaying = d.isPlaying;
+        // Stop any active YouTube timer for this deck
+        if (ytTimersRef.current[deck]) {
+            window.clearInterval(ytTimersRef.current[deck] as number);
+            ytTimersRef.current[deck] = null;
+        }
+        // If switching away from YouTube, stop playback
+        const existingPlayer = ytPlayersRef.current[deck];
+        if (existingPlayer && (decks[deck].currentItemId && item.sourceType !== "youtube")) {
+            try { existingPlayer.stopVideo?.(); } catch {}
+        }
         if (d.objectUrl && d.objectUrl !== item.src) {
             try { URL.revokeObjectURL(d.objectUrl); } catch {}
         }
-        d.audio.pause();
-        d.audio.src = item.src;
-        d.audio.currentTime = 0;
-        d.audio.loop = true;
-        d.audio.preload = "auto";
-        try {
-            (d.audio as any).preservesPitch = false;
-            (d.audio as any).mozPreservesPitch = false;
-            (d.audio as any).webkitPreservesPitch = false;
-        } catch {}
-        d.audio.load();
-        setDecks(prev => ({
-            ...prev,
-            [deck]: {
-                ...prev[deck],
-                baseBpm: item.baseBpm ?? null,
-                currentTime: 0,
-                duration: 0,
-                isPlaying: false,
-                objectUrl: item.sourceType === "file" ? item.src : undefined,
-                currentItemId: item.id,
-            }
-        }));
-        const resumeIfNeeded = async () => {
-            if (wasPlaying) {
-                try { await audioCtxRef.current?.resume?.(); } catch {}
+        if (item.sourceType === "youtube" && item.youtubeId) {
+            // Prepare YT playback
+            setDecks(prev => ({
+                ...prev,
+                [deck]: {
+                    ...prev[deck],
+                    baseBpm: item.baseBpm ?? null,
+                    currentTime: 0,
+                    duration: 0,
+                    isPlaying: false,
+                    objectUrl: undefined,
+                    currentItemId: item.id,
+                }
+            }));
+            const ensureReady = () => new Promise<void>((resolve) => {
+                if (ytReadyRef.current && (window as any).YT?.Player) return resolve();
+                const iv = window.setInterval(() => {
+                    if (ytReadyRef.current && (window as any).YT?.Player) {
+                        window.clearInterval(iv);
+                        resolve();
+                    }
+                }, 50);
+            });
+            await ensureReady();
+            let player = ytPlayersRef.current[deck];
+            const containerId = `yt-${deck}`;
+            const setupTimer = () => {
+                if (ytTimersRef.current[deck]) window.clearInterval(ytTimersRef.current[deck] as number);
+                ytTimersRef.current[deck] = window.setInterval(() => {
+                    try {
+                        const p = ytPlayersRef.current[deck];
+                        const ct = p?.getCurrentTime?.() ?? 0;
+                        const dur = p?.getDuration?.() ?? 0;
+                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: ct, duration: dur } }));
+                    } catch {}
+                }, 250) as unknown as number;
+            };
+            const onReady = () => {
                 try {
-                    await d.audio.play();
-                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
+                    const p = ytPlayersRef.current[deck];
+                    const dur = p?.getDuration?.() ?? 0;
+                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], duration: dur } }));
+                    setupTimer();
+                    if (wasPlaying) {
+                        try { p?.playVideo?.(); } catch {}
+                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
+                    }
                 } catch {}
+            };
+            const onStateChange = (e: any) => {
+                const YT = (window as any).YT;
+                if (!YT) return;
+				// keep slider synced on any state change
+				try {
+                    const p = ytPlayersRef.current[deck];
+					const ct = p?.getCurrentTime?.() ?? 0;
+					const dur = p?.getDuration?.() ?? 0;
+					setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: ct, duration: dur } }));
+				} catch {}
+				setupTimer();
+                if (e.data === YT.PlayerState.PLAYING) {
+                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
+                } else if (e.data === YT.PlayerState.PAUSED) {
+                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
+                } else if (e.data === YT.PlayerState.ENDED) {
+                    // loop
+                    try { ytPlayersRef.current[deck]?.seekTo?.(0, true); ytPlayersRef.current[deck]?.playVideo?.(); } catch {}
+                }
+            };
+            if (player) {
+                try {
+                    player.loadVideoById({ videoId: item.youtubeId, startSeconds: 0, suggestedQuality: "large" });
+					// Try to sync immediately and start timer
+					try {
+                        const p = ytPlayersRef.current[deck];
+						const dur = p?.getDuration?.() ?? 0;
+						const ct = p?.getCurrentTime?.() ?? 0;
+						setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: ct, duration: dur } }));
+					} catch {}
+					setupTimer();
+                } catch {
+                    try { player.destroy?.(); } catch {}
+                    ytPlayersRef.current[deck] = null;
+                    player = null;
+                }
             }
-        };
-        d.audio.addEventListener("canplay", resumeIfNeeded, { once: true });
-        if (item.baseBpm == null) {
-            const bpm = item.sourceType === "url"
-                ? await analyzeBpmForUrl(item.src)
-                : await (async () => {
-                    try { const res = await fetch(item.src); const b = await res.blob(); return await analyzeBpmFromBlob(b); } catch { return null; }
-                })();
-            if (bpm) {
-                setDecks(prev => {
-                    const list = prev[deck]?.playlist || [];
-                    const idx = list.findIndex(it => it.id === itemId);
-                    const nextList = [...list];
-                    if (idx !== -1) nextList[idx] = { ...nextList[idx], baseBpm: bpm };
-                    const isCurrent = prev[deck]?.currentItemId === itemId;
-                    return {
-                        ...prev,
-                        [deck]: { ...prev[deck], playlist: nextList, baseBpm: isCurrent ? bpm : prev[deck].baseBpm }
-                    };
+            if (!player) {
+                ytPlayersRef.current[deck] = new (window as any).YT.Player(containerId, {
+                    videoId: item.youtubeId,
+                    playerVars: {
+                        autoplay: 0,
+                        controls: 0,
+                        rel: 0,
+                        modestbranding: 1,
+                        playsinline: 1,
+                    },
+                    events: {
+                        onReady: onReady,
+                        onStateChange: onStateChange,
+                    }
                 });
+                // Ensure local `player` reference mirrors ref for subsequent logic
+                player = ytPlayersRef.current[deck];
             }
+        } else {
+            // Regular audio path
+            d.audio.pause();
+            d.audio.src = item.src;
+            d.audio.currentTime = 0;
+            d.audio.loop = true;
+            d.audio.preload = "auto";
+            try {
+                (d.audio as any).preservesPitch = false;
+                (d.audio as any).mozPreservesPitch = false;
+                (d.audio as any).webkitPreservesPitch = false;
+            } catch {}
+            d.audio.load();
+            setDecks(prev => ({
+                ...prev,
+                [deck]: {
+                    ...prev[deck],
+                    baseBpm: item.baseBpm ?? null,
+                    currentTime: 0,
+                    duration: 0,
+                    isPlaying: false,
+                    objectUrl: item.sourceType === "file" ? item.src : undefined,
+                    currentItemId: item.id,
+                }
+            }));
+            const resumeIfNeeded = async () => {
+                if (wasPlaying) {
+                    try { await audioCtxRef.current?.resume?.(); } catch {}
+                    try {
+                        await d.audio.play();
+                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
+                    } catch {}
+                }
+            };
+            d.audio.addEventListener("canplay", resumeIfNeeded, { once: true });
+		if (item.baseBpm == null) {
+			let bpm: number | null = null;
+			if (item.sourceType === "url") {
+				bpm = await analyzeBpmForUrl(item.src);
+			} else if (item.sourceType === "file") {
+				bpm = await (async () => {
+					try { const res = await fetch(item.src); const b = await res.blob(); return await analyzeBpmFromBlob(b); } catch { return null; }
+				})();
+			} else if (item.sourceType === "youtube") {
+				// Skip BPM analysis for YouTube
+				bpm = null;
+			}
+			if (bpm) {
+				setDecks(prev => {
+					const list = prev[deck]?.playlist || [];
+					const idx = list.findIndex(it => it.id === itemId);
+					const nextList = [...list];
+					if (idx !== -1) nextList[idx] = { ...nextList[idx], baseBpm: bpm };
+					const isCurrent = prev[deck]?.currentItemId === itemId;
+					return {
+						...prev,
+						[deck]: { ...prev[deck], playlist: nextList, baseBpm: isCurrent ? bpm : prev[deck].baseBpm }
+					};
+				});
+			}
+		}
         }
     };
 
@@ -445,6 +687,19 @@ export default function Music() {
     const toggleDeck = async (deck: string) => {
         const d = decks[deck];
         if (!d?.audio) return;
+        const currentItem = d.playlist?.find(x => x.id === d.currentItemId);
+        if (currentItem?.sourceType === "youtube") {
+            const player = ytPlayersRef.current[deck];
+            if (!player) return;
+            if (d.isPlaying) {
+                try { player.pauseVideo?.(); } catch {}
+                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
+            } else {
+                try { player.playVideo?.(); } catch {}
+                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
+            }
+            return;
+        }
         const ctx = audioCtxRef.current;
         if (d.isPlaying) {
             d.audio.pause();
@@ -840,9 +1095,9 @@ export default function Music() {
                                                         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                                                             <div style={{ width: 6, height: 6, borderRadius: 999, background: decks[deck].currentItemId === item.id ? "#60d394" : "#555" }} />
                                                             <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>{item.title}</div>
-                                                            {typeof item.baseBpm === "number" ? (
+															{typeof item.baseBpm === "number" ? (
                                                                 <span style={{ opacity: 0.7, fontSize: 12 }}>• {item.baseBpm.toFixed(0)} BPM</span>
-                                                            ) : (
+															) : item.sourceType === "youtube" ? null : (
                                                                 <span style={{ opacity: 0.5, fontSize: 12 }}>• analyzing…</span>
                                                             )}
                                                         </div>
@@ -925,13 +1180,24 @@ export default function Music() {
                                                 value={Math.min(decks[deck].currentTime || 0, decks[deck].duration || 0)}
                                                 onChange={(e) => {
                                                     const to = Number(e.target.value);
-                                                    decks[deck].audio.currentTime = to;
-                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
+                                                    const currentItem = decks[deck].playlist?.find(x => x.id === decks[deck].currentItemId);
+                                                    if (currentItem?.sourceType === "youtube") {
+                                                        const player = ytPlayersRef.current[deck];
+                                                        try { player?.seekTo?.(to, true); } catch {}
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
+                                                    } else {
+                                                        decks[deck].audio.currentTime = to;
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
+                                                    }
                                                 }}
                                                 aria-label={`${deck} position`}
                                                 disabled={!decks[deck].duration || decks[deck].duration === 0}
                                             />
                                             <span>{formatTime(decks[deck].duration)}</span>
+                                        </div>
+                                        {/* Hidden YouTube container (background playback) */}
+                                        <div style={{ position: "fixed", width: 1, height: 1, opacity: 0, pointerEvents: "none", left: -9999, top: -9999, overflow: "hidden" }}>
+                                            <div id={`yt-${deck}`} style={{ width: 1, height: 1 }} />
                                         </div>
                                         <div className="controls" style={{ width: "100%", justifyContent: "center", gap: 24 }}>
                                             <div className="vGroup">
