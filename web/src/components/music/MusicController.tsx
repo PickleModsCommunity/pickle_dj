@@ -30,6 +30,7 @@ export default function MusicController() {
     const audioCtxRef = useRef<AudioContext | null>(null);
     const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode }>>({});
     const masterBusRef = useRef<GainNode | null>(null);
+    const broadcastBusRef = useRef<GainNode | null>(null);
     const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const streamIdRef = useRef<string | null>(null);
@@ -103,23 +104,32 @@ export default function MusicController() {
         const ctx: AudioContext = audioCtxRef.current ?? new AudioCtx();
         audioCtxRef.current = ctx;
 
-        // Create master bus and a stream tap
+        // Create master bus (for local monitoring) and a separate broadcast bus (for recording/stream)
         const masterBus = ctx.createGain();
         masterBus.gain.value = 1.0;
         masterBus.connect(ctx.destination);
         masterBusRef.current = masterBus;
+        const broadcastBus = ctx.createGain();
+        broadcastBus.gain.value = 1.0;
+        broadcastBusRef.current = broadcastBus;
         try {
             const streamDest = ctx.createMediaStreamDestination();
             streamDestRef.current = streamDest;
-            masterBus.connect(streamDest);
+            // Route broadcast bus to the recording stream; keep master bus for headphones/room
+            broadcastBus.connect(streamDest);
         } catch {}
 
         const makeChain = (el: HTMLAudioElement) => {
             const source = ctx.createMediaElementSource(el);
             const gain = ctx.createGain();
             const panner = ctx.createStereoPanner();
-            // Route each deck into the master bus (which also feeds ctx.destination)
-            source.connect(gain).connect(panner).connect(masterBus);
+            // Route each deck into master bus (for monitoring via panners)
+            // and also into broadcast bus (pre-panner) so monitoring pan doesn't affect stream
+            source.connect(gain);
+            gain.connect(panner).connect(masterBus);
+            try {
+                broadcastBusRef.current && gain.connect(broadcastBusRef.current);
+            } catch {}
             return { source, gain, panner };
         };
 
@@ -232,7 +242,8 @@ export default function MusicController() {
         streamIdRef.current = streamId;
         seqRef.current = 0;
 
-        await nuiPost("music_stream_start", { streamId, mimeType });
+        const actualMime = (mr as any).mimeType || mimeType;
+        await nuiPost("music_stream_start", { streamId, mimeType: actualMime });
 
         mr.ondataavailable = async (ev: BlobEvent) => {
             if (!ev.data || ev.data.size === 0) return;
@@ -243,7 +254,7 @@ export default function MusicController() {
                 await nuiPost("music_stream_chunk", {
                     streamId,
                     seq,
-                    mimeType,
+                    mimeType: actualMime,
                     base64: b64,
                 });
             } catch {}
@@ -251,9 +262,13 @@ export default function MusicController() {
         mr.onstop = async () => {
             await nuiPost("music_stream_stop", { streamId });
         };
-        // 1000ms timeslice to emit chunks roughly every second
-        mr.start(1000);
+        // Larger timeslice can improve WebM cluster continuity across appends
+        mr.start(4000);
         setIsBroadcasting(true);
+        try {
+            (window as any).__musicBroadcastStreamId = streamId;
+            (window as any).__musicIsBroadcaster = true;
+        } catch {}
     };
 
     const stopBroadcast = async () => {
@@ -265,7 +280,32 @@ export default function MusicController() {
             }
         } catch {}
         mediaRecorderRef.current = null;
+        try {
+            (window as any).__musicIsBroadcaster = false;
+            (window as any).__musicBroadcastStreamId = null;
+        } catch {}
     };
+
+    // Auto-start broadcasting once decks/graph are ready
+    useEffect(() => {
+        // Start once when both decks are initialized and stream node exists
+        if (isBroadcasting) return;
+        if (!decks.track_1 || !decks.track_2) return;
+        if (!audioCtxRef.current || !streamDestRef.current) return;
+        // Best-effort kickoff (safe to call if already recording due to guard above)
+        startBroadcast();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [!!decks.track_1, !!decks.track_2]);
+
+    // Stop broadcasting on unmount if still active
+    useEffect(() => {
+        return () => {
+            if (isBroadcasting) {
+                stopBroadcast();
+            }
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isBroadcasting]);
 
     // Load YouTube IFrame API once
     useEffect(() => {
