@@ -1,69 +1,132 @@
--- Simple NUI echo bridge for local testing of MusicController -> Client -> MusicPlayer
--- Receives POSTs from NUI (fetch to https://<resource>/<name>) and immediately
--- forwards them back into the same NUI as window messages.
+local __turn_config = nil
 
-RegisterNUICallback('music_stream_start', function(data, cb)
-	local data = json.encode(data)
-    TriggerServerEvent('music:streamStart', data, #data)
-	-- data: { streamId: string, mimeType: string }
+CreateThread(function()
+	Wait(1000)
+	TriggerServerEvent('music:rtc:requestTurnConfig')
+end)
+
+RegisterNetEvent('music:rtc:turnConfig', function(data)
+	local payload = {}
+	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+	if ok and type(parsed) == "table" then payload = parsed end
+	__turn_config = payload
+	print("turn config", json.encode(__turn_config))
+end)
+
+RegisterNUICallback('music_rtc_get_turn_config', function(data, cb)
+	cb({ ok = true, config = __turn_config })
+end)
+
+RegisterNUICallback('music_rtc_request_turn_config', function(data, cb)
+	TriggerServerEvent('music:rtc:requestTurnConfig')
 	if cb then cb({ ok = true }) end
 end)
 
-RegisterNUICallback('music_stream_chunk', function(data, cb)
-	-- data: { streamId: string, seq: number, mimeType?: string, base64: string }
-	local data = json.encode(data)
-    TriggerServerEvent('music:streamChunk', data, #data)
+RegisterNUICallback('music_rtc_announce_broadcast', function(data, cb)
+	local enc = json.encode(data or {})
+	TriggerServerEvent('music:rtc:announceBroadcast', enc, #enc)
 	if cb then cb({ ok = true }) end
 end)
 
-RegisterNUICallback('music_stream_stop', function(data, cb)
-	-- data: { streamId: string }
-	local data = json.encode(data)
-    TriggerServerEvent('music:streamStop', data, #data)
+RegisterNUICallback('music_rtc_stop_broadcast', function(data, cb)
+	TriggerServerEvent('music:rtc:stopBroadcast')
 	if cb then cb({ ok = true }) end
 end)
 
-RegisterNetEvent("music:streamStart", function(data)
-	data = json.decode(data)
+RegisterNUICallback('music_rtc_offer', function(data, cb)
+	print("[music] NUI music_rtc_offer")
+	-- data: { sdp: string }
+	local sdp = (data and data.sdp) or ""
+	TriggerServerEvent('music:rtc:offer', sdp, #sdp)
+	if cb then cb({ ok = true }) end
+end)
+
+RegisterNUICallback('music_rtc_answer', function(data, cb)
+	print("[music] NUI music_rtc_answer -> to", (data and data.to) or -1)
+	-- data: { to: number, sdp: string }
+	local to = (data and data.to) or -1
+	local sdp = (data and data.sdp) or ""
+	TriggerServerEvent('music:rtc:answer', to, sdp)
+	if cb then cb({ ok = true }) end
+end)
+
+RegisterNUICallback('music_rtc_ice_to_broadcaster', function(data, cb)
+	print("[music] NUI music_rtc_ice_to_broadcaster")
+	-- data: { candidate: any-json }
+	local cand = (data and data.candidate) or nil
+	if cand ~= nil then
+		TriggerServerEvent('music:rtc:iceToBroadcaster', json.encode(cand))
+	end
+	if cb then cb({ ok = true }) end
+end)
+
+RegisterNUICallback('music_rtc_ice_to_listener', function(data, cb)
+	print("[music] NUI music_rtc_ice_to_listener -> to", (data and data.to) or -1)
+	-- data: { to: number, candidate: any-json }
+	local to = (data and data.to) or -1
+	local cand = (data and data.candidate) or nil
+	if to ~= -1 and cand ~= nil then
+		TriggerServerEvent('music:rtc:iceToListener', to, json.encode(cand))
+	end
+	if cb then cb({ ok = true }) end
+end)
+
+RegisterNetEvent('music:rtc:broadcastStarted', function(data)
+	local payload = {}
+	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+	if ok and type(parsed) == "table" then payload = parsed end
 	SendNUIMessage({
-		type = 'music:streamStart',
+		type = 'music:rtc:broadcastStarted',
 		payload = {
-			streamId = data and data.streamId or nil,
-			mimeType = data and data.mimeType or nil
+			streamId = payload.streamId,
+			broadcaster = payload.broadcaster
 		}
 	})
 end)
 
-local __music_last_seq_by_stream = {}
-
-RegisterNetEvent("music:streamChunk", function(data)
-	data = json.decode(data)
-    local sid = data and data.streamId or nil
-    local seq = data and data.seq or 0
-    if sid then
-        local last = __music_last_seq_by_stream[sid] or -1
-        if seq <= last then
-            return
-        end
-        __music_last_seq_by_stream[sid] = seq
-    end
+RegisterNetEvent('music:rtc:broadcastStopped', function(data)
 	SendNUIMessage({
-		type = 'music:streamChunk',
-		payload = {
-			streamId = sid,
-			seq = seq,
-            mimeType = data and data.mimeType or nil,
-			base64 = data and data.base64 or ''
-		}
+		type = 'music:rtc:broadcastStopped',
+		payload = {}
 	})
 end)
 
-RegisterNetEvent("music:streamStop", function(data)
-	data = json.decode(data)
+RegisterNetEvent('music:rtc:offer', function(data)
+	local payload = {}
+	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+	if ok and type(parsed) == "table" then payload = parsed end
 	SendNUIMessage({
-		type = 'music:streamStop',
-		payload = {
-			streamId = data and data.streamId or nil
-		}
+		type = 'music:rtc:offer',
+		payload = payload
+	})
+end)
+
+RegisterNetEvent('music:rtc:answer', function(data)
+	local payload = {}
+	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+	if ok and type(parsed) == "table" then payload = parsed end
+	SendNUIMessage({
+		type = 'music:rtc:answer',
+		payload = payload
+	})
+end)
+
+RegisterNetEvent('music:rtc:iceFromListener', function(data)
+	local payload = {}
+	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+	if ok and type(parsed) == "table" then payload = parsed end
+	SendNUIMessage({
+		type = 'music:rtc:iceFromListener',
+		payload = payload
+	})
+end)
+
+RegisterNetEvent('music:rtc:iceFromBroadcaster', function(data)
+	local payload = {}
+	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+	if ok and type(parsed) == "table" then payload = parsed end
+	SendNUIMessage({
+		type = 'music:rtc:iceFromBroadcaster',
+		payload = payload
 	})
 end)

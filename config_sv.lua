@@ -1,4 +1,11 @@
 ConfigSV = {}
+ConfigSV.StreamingServer = {
+    mode = "cloudflare",
+    cloudflare = {
+        turnTokenId = "4bffd063cdf1dc2521072d009aa5ff97",
+        apiToken = "acb4b6e83c4d4045b7ea02e3f3137a03e423550712b30a676e1d185ec5719bcd",
+    }
+}
 ConfigSV.Webhooks = {
     ["computer"] = { 
         url = "WEBHOOK_URL",

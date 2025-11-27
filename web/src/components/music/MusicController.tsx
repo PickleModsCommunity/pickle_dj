@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNuiEvent } from "../../providers/nui/useNui";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -26,16 +27,21 @@ export default function MusicController() {
     const [crossfade, setCrossfade] = useState(0.5); // 0 = left only, 1 = right only
     const [masterVolume, setMasterVolume] = useState(0.6); // overall gain cap
 
+    useEffect(() => {
+        console.log("MusicController: mounted");
+        return () => console.log("MusicController: unmounted");
+    }, []);
     // Web Audio routing
     const audioCtxRef = useRef<AudioContext | null>(null);
     const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode }>>({});
     const masterBusRef = useRef<GainNode | null>(null);
     const broadcastBusRef = useRef<GainNode | null>(null);
     const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-    const streamIdRef = useRef<string | null>(null);
-    const seqRef = useRef<number>(0);
     const [isBroadcasting, setIsBroadcasting] = useState(false);
+
+    const peerMapRef = useRef<Record<number, RTCPeerConnection>>({});
+    const outboundTrackRef = useRef<MediaStreamTrack | null>(null);
+    const streamIdRef = useRef<string | null>(null);
 
     // YouTube players per deck
     const ytPlayersRef = useRef<Record<string, any>>({});
@@ -189,7 +195,7 @@ export default function MusicController() {
             const fn = (window as any).GetParentResourceName;
             if (typeof fn === "function") return fn();
         } catch {}
-        return "nui-resource";
+        return "pickle_clubs";
     };
     const nuiPost = async (name: string, data?: any) => {
         const resource = getParentResource();
@@ -199,18 +205,48 @@ export default function MusicController() {
                 headers: { "Content-Type": "application/json; charset=utf-8" },
                 body: JSON.stringify(data ?? {}),
             });
-        } catch {}
+        } catch (e) {
+            console.error("MusicController: NUI POST failed", name, e);
+        }
+    };
+    const nuiPostJson = async <T,>(name: string, data?: any): Promise<T | null> => {
+        const resource = getParentResource();
+        try {
+            const res = await fetch(`https://${resource}/${name}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json; charset=utf-8" },
+                body: JSON.stringify(data ?? {}),
+            });
+            const txt = await res.text();
+            try { return JSON.parse(txt) as T; } catch { return null; }
+        } catch (e) {
+            console.error("MusicController: NUI POST JSON failed", name, e);
+            return null;
+        }
+    };
+    type TurnConfig = {
+        iceServers?: Array<{ urls: string[] | string; username?: string; credential?: string; }>;
+    };
+    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+    const fetchTurnConfig = async (): Promise<RTCConfiguration> => {
+        let requested = false;
+        for (let i = 0; i < 15; i++) {
+            const cfg = await nuiPostJson<{ ok: boolean; config?: TurnConfig }>("music_rtc_get_turn_config", {});
+            const c = (cfg && cfg.config) ? cfg.config : null;
+            const valid = !!(c && Array.isArray(c.iceServers) && c.iceServers.length > 0);
+            if (valid) {
+                return { iceServers: c!.iceServers as any };
+            }
+            if (!requested) {
+                requested = true;
+                await nuiPost("music_rtc_request_turn_config", {});
+            }
+            await sleep(200);
+        }
+        return {};
     };
 
-    const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
-        let binary = "";
-        const bytes = new Uint8Array(buffer);
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as unknown as number[]);
-        }
-        return btoa(binary);
-    };
+    // (no-op placeholder removed: chunk-based streaming is no longer used)
 
     const startBroadcast = async () => {
         if (isBroadcasting) return;
@@ -219,51 +255,14 @@ export default function MusicController() {
         if (!ctx || !streamNode) return;
         try { await ctx.resume?.(); } catch {}
 
-        const preferredTypes = [
-            "audio/webm;codecs=opus",
-            "audio/webm",
-            "audio/ogg;codecs=opus",
-        ];
-        let mimeType = "";
-        for (const t of preferredTypes) {
-            if ((window as any).MediaRecorder && (window as any).MediaRecorder.isTypeSupported?.(t)) {
-                mimeType = t;
-                break;
-            }
-        }
-        if (!mimeType) {
-            // Fall back; most CEF/Chromium in FiveM supports webm/opus
-            mimeType = "audio/webm;codecs=opus";
-        }
+        const stream = streamNode.stream;
+        const audioTracks = stream.getAudioTracks();
+        outboundTrackRef.current = (audioTracks && audioTracks[0]) ? audioTracks[0] : null;
 
-        const mr = new MediaRecorder(streamNode.stream, { mimeType });
-        mediaRecorderRef.current = mr;
         const streamId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
         streamIdRef.current = streamId;
-        seqRef.current = 0;
-
-        const actualMime = (mr as any).mimeType || mimeType;
-        await nuiPost("music_stream_start", { streamId, mimeType: actualMime });
-
-        mr.ondataavailable = async (ev: BlobEvent) => {
-            if (!ev.data || ev.data.size === 0) return;
-            try {
-                const buf = await ev.data.arrayBuffer();
-                const b64 = arrayBufferToBase64(buf);
-                const seq = seqRef.current++;
-                await nuiPost("music_stream_chunk", {
-                    streamId,
-                    seq,
-                    mimeType: actualMime,
-                    base64: b64,
-                });
-            } catch {}
-        };
-        mr.onstop = async () => {
-            await nuiPost("music_stream_stop", { streamId });
-        };
-        // Larger timeslice can improve WebM cluster continuity across appends
-        mr.start(4000);
+        await nuiPost("music_rtc_announce_broadcast", { streamId });
+        console.log("MusicController: broadcast announced", { streamId, hasTrack: !!outboundTrackRef.current });
         setIsBroadcasting(true);
         try {
             (window as any).__musicBroadcastStreamId = streamId;
@@ -272,19 +271,98 @@ export default function MusicController() {
     };
 
     const stopBroadcast = async () => {
+        if (!isBroadcasting) return;
         setIsBroadcasting(false);
-        try {
-            const mr = mediaRecorderRef.current;
-            if (mr && mr.state !== "inactive") {
-                mr.stop();
-            }
-        } catch {}
-        mediaRecorderRef.current = null;
+        await nuiPost("music_rtc_stop_broadcast", {});
+        const map = peerMapRef.current;
+        for (const k of Object.keys(map)) {
+            const id = Number(k);
+            const pc = map[id];
+            try { pc.onicecandidate = null; } catch {}
+            try { pc.ontrack = null; } catch {}
+            try { pc.getSenders().forEach(s => { try { pc.removeTrack(s); } catch {} }); } catch {}
+            try { pc.close(); } catch {}
+            delete map[id];
+        }
+        peerMapRef.current = {};
+        outboundTrackRef.current = null;
+        streamIdRef.current = null;
         try {
             (window as any).__musicIsBroadcaster = false;
             (window as any).__musicBroadcastStreamId = null;
         } catch {}
     };
+
+    const ensureBroadcasterPeer = async (listenerId: number): Promise<RTCPeerConnection | null> => {
+        const existing = peerMapRef.current[listenerId];
+        if (existing) return existing;
+        const cfg = await fetchTurnConfig();
+        const pc = new RTCPeerConnection(cfg);
+        try {
+            pc.onconnectionstatechange = () => console.log("MusicController RTC connectionState:", pc.connectionState, "to", listenerId);
+            pc.oniceconnectionstatechange = () => console.log("MusicController RTC iceConnectionState:", pc.iceConnectionState, "to", listenerId);
+            pc.onicegatheringstatechange = () => console.log("MusicController RTC gatheringState:", pc.iceGatheringState, "to", listenerId);
+        } catch {}
+        pc.onicecandidate = (ev) => {
+            if (ev.candidate) {
+                nuiPost("music_rtc_ice_to_listener", { to: listenerId, candidate: ev.candidate });
+            }
+        };
+        const stream = streamDestRef.current?.stream || null;
+        const track = outboundTrackRef.current || (stream ? stream.getAudioTracks()[0] : null);
+        if (track && stream) {
+            try { 
+                pc.addTrack(track, stream);
+                console.log("MusicController: added outbound track to peer", { listenerId, enabled: track.enabled, muted: (track as any).muted });
+                try {
+                    (track as any).onmute = () => console.warn("MusicController: outbound track muted");
+                    (track as any).onunmute = () => console.warn("MusicController: outbound track unmuted");
+                    (track as any).onended = () => console.warn("MusicController: outbound track ended");
+                } catch {}
+            } catch (e) {
+                console.error("MusicController: addTrack failed", e);
+            }
+            outboundTrackRef.current = track;
+        }
+        peerMapRef.current[listenerId] = pc;
+        return pc;
+    };
+
+    useNuiEvent("music:rtc:offer", async (msg: any) => {
+        if (!isBroadcasting) return;
+        const payload = (msg && (msg.payload || msg.data)) || {};
+        const from = Number(payload.from);
+        const sdp = payload.sdp;
+        if (!from || !sdp) return;
+        console.log("MusicController: received offer from", from);
+        const pc = await ensureBroadcasterPeer(from);
+        if (!pc) return;
+        try {
+            await pc.setRemoteDescription({ type: "offer", sdp });
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await nuiPost("music_rtc_answer", { to: from, sdp: answer.sdp });
+            console.log("MusicController: sent answer to", from);
+        } catch {}
+    });
+
+    useNuiEvent("music:rtc:iceFromListener", async (msg: any) => {
+        if (!isBroadcasting) return;
+        const payload = (msg && (msg.payload || msg.data)) || {};
+        const from = Number(payload.from);
+        let candidate = payload.candidate;
+        if (!from || !candidate) return;
+        const pc = peerMapRef.current[from];
+        if (!pc) return;
+        try {
+            // Normalize candidate possibly sent as JSON string
+            if (typeof candidate === "string") {
+                try { candidate = JSON.parse(candidate); } catch {}
+            }
+            await pc.addIceCandidate(candidate as RTCIceCandidateInit);
+            console.log("MusicController: added ICE candidate from", from);
+        } catch {}
+    });
 
     // Auto-start broadcasting once decks/graph are ready
     useEffect(() => {

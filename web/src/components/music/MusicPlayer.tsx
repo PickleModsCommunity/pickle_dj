@@ -1,277 +1,200 @@
 import { useEffect, useRef, useState } from "react";
 import { useNuiEvent } from "../../providers/nui/useNui";
 
-function base64ToArrayBuffer(b64: string): ArrayBuffer {
-	const binary = atob(b64);
-	const len = binary.length;
-	const bytes = new Uint8Array(len);
-	for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-	return bytes.buffer;
-}
+type TurnConfig = {
+	iceServers?: Array<{ urls: string[] | string; username?: string; credential?: string; }>;
+};
 
 export default function MusicPlayer() {
 	const audioRef = useRef<HTMLAudioElement | null>(null);
-	const mediaSourceRef = useRef<MediaSource | null>(null);
-	const sourceBufferRef = useRef<SourceBuffer | null>(null);
-	const currentStreamIdRef = useRef<string | null>(null);
+	const pcRef = useRef<RTCPeerConnection | null>(null);
+	const broadcasterRef = useRef<number | null>(null);
 	const [isPlaying, setIsPlaying] = useState(false);
-	const lastSeqRef = useRef<Record<string, number>>({});
-	const LIVE_LATENCY_SEC = 1.2; // larger buffer to reduce underruns/pops
-	const RETAIN_WINDOW_SEC = 30; // keep last 30s to prevent quota and reduce churn
-	const lastSeekAtRef = useRef<number>(0);
-	const nextSeqRef = useRef<number>(-1);
-	const chunkMapRef = useRef<Map<number, ArrayBuffer>>(new Map());
-	const firstAppendDoneRef = useRef<boolean>(false);
 
-	// Debug: catch-all NUI message logger to verify delivery
 	useEffect(() => {
-		const listener = (ev: MessageEvent) => {
-			const t = (ev && (ev as any).data && (ev as any).data.type) || "";
-			if (t && (t.startsWith("music:"))) {
-				console.log("MusicPlayer: caught NUI message", t, (ev as any).data);
-			}
-		};
-		window.addEventListener("message", listener);
-		return () => window.removeEventListener("message", listener);
+		console.log("MusicPlayer: mounted");
+		return () => console.log("MusicPlayer: unmounted");
 	}, []);
-	const tryAppend = () => {
-		const sb = sourceBufferRef.current;
-		const ms = mediaSourceRef.current;
-		if (!ms || ms.readyState !== "open") return;
-		if (!sb || sb.updating) return;
-		// Drain in-order chunks and coalesce a small batch to reduce append churn
-		let count = 0;
-		let total = 0;
-		const parts: ArrayBuffer[] = [];
-		while (nextSeqRef.current >= 0 && chunkMapRef.current.has(nextSeqRef.current) && count < 1 && total < 300000) {
-			const ab = chunkMapRef.current.get(nextSeqRef.current)!;
-			chunkMapRef.current.delete(nextSeqRef.current);
-			parts.push(ab);
-			total += ab.byteLength;
-			nextSeqRef.current++;
-			count++;
-		}
-		if (parts.length === 0) return;
+
+	const getParentResource = (): string => {
 		try {
-			let toAppend: ArrayBuffer;
-			if (parts.length === 1) {
-				toAppend = parts[0];
-			} else {
-				const out = new Uint8Array(total);
-				let offset = 0;
-				for (const p of parts) {
-					out.set(new Uint8Array(p), offset);
-					offset += p.byteLength;
-				}
-				toAppend = out.buffer;
-			}
-			sb.appendBuffer(toAppend);
-			if (!firstAppendDoneRef.current) firstAppendDoneRef.current = true;
+			const fn = (window as any).GetParentResourceName;
+			if (typeof fn === "function") return fn();
+		} catch {}
+		return "pickle_clubs";
+	};
+	const nuiPost = async (name: string, data?: any) => {
+		const resource = getParentResource();
+		try {
+			await fetch(`https://${resource}/${name}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json; charset=utf-8" },
+				body: JSON.stringify(data ?? {}),
+			});
 		} catch (e) {
-			console.warn("MusicPlayer: appendBuffer failed", e);
+			console.error("MusicPlayer: NUI POST failed", name, e);
+		}
+	};
+	const nuiPostJson = async <T,>(name: string, data?: any): Promise<T | null> => {
+		const resource = getParentResource();
+		try {
+			const res = await fetch(`https://${resource}/${name}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json; charset=utf-8" },
+				body: JSON.stringify(data ?? {}),
+			});
+			const txt = await res.text();
+			try { return JSON.parse(txt) as T; } catch { return null; }
+		} catch (e) {
+			console.error("MusicPlayer: NUI POST JSON failed", name, e);
+			return null;
 		}
 	};
 
-	const chooseSupportedMimeType = (incoming: string): string | null => {
-		const MS: any = (window as any).MediaSource || (window as any).WebKitMediaSource;
-		if (!MS || typeof MS.isTypeSupported !== "function") return incoming;
-		const normalize = (mt: string) => {
-			return mt.replace(/codecs=opus/gi, 'codecs="opus"').replace(/codecs=vorbis/gi, 'codecs="vorbis"');
-		};
-		const candidates = [
-			normalize(incoming),
-			'audio/webm; codecs="opus"',
-			"audio/webm",
-			'audio/ogg; codecs="opus"',
-		];
-		for (const c of candidates) {
-			try {
-				if (MS.isTypeSupported(c)) return c;
-			} catch {}
+	const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+	const ensureTurnConfig = async (): Promise<TurnConfig | null> => {
+		let requested = false;
+		for (let i = 0; i < 15; i++) {
+			const cfgResp = await nuiPostJson<{ ok: boolean; config?: TurnConfig }>("music_rtc_get_turn_config", {});
+			const cfg = (cfgResp && cfgResp.config) ? cfgResp.config : null;
+			const valid = !!(cfg && Array.isArray(cfg.iceServers) && cfg.iceServers.length > 0);
+			if (valid) {
+				return cfg;
+			}
+			if (!requested) {
+				requested = true;
+				await nuiPost("music_rtc_request_turn_config", {});
+			}
+			await sleep(200);
 		}
 		return null;
 	};
 
-	// Listen for NUI events instead of raw window messages
-	useNuiEvent("music:streamStart", (msg: any) => {
-		const payload = (msg && (msg.payload || msg.data)) || {};
-		const { streamId, mimeType } = payload;
-		if (!streamId || !mimeType) return;
+	const closePc = () => {
 		try {
-			if ((window as any).__musicBroadcastStreamId && (window as any).__musicBroadcastStreamId === streamId) {
-				console.log("MusicPlayer: ignoring local broadcast stream", streamId);
-				return;
+			const pc = pcRef.current;
+			if (pc) {
+				try { pc.onicecandidate = null; } catch {}
+				try { pc.ontrack = null; } catch {}
+				try { pc.getSenders().forEach(s => { try { pc.removeTrack(s); } catch {} }); } catch {}
+				try { pc.close(); } catch {}
 			}
 		} catch {}
-		currentStreamIdRef.current = streamId;
-		lastSeqRef.current[streamId] = -1;
-		nextSeqRef.current = -1;
-		try { chunkMapRef.current.clear(); } catch {}
+		pcRef.current = null;
+	};
 
-		const ms = new MediaSource();
-		mediaSourceRef.current = ms;
-		const audio = audioRef.current;
-		if (!audio) return;
-		audio.src = URL.createObjectURL(ms);
-		audio.muted = false;
-		audio.volume = 1.0;
-		try { audio.load(); } catch {}
+	useNuiEvent("music:rtc:broadcastStarted", async (msg: any) => {
+		try {
+			const payload = (msg && (msg.payload || msg.data)) || {};
+			const { broadcaster } = payload || {};
+			broadcasterRef.current = typeof broadcaster === "number" ? broadcaster : null;
+			console.log("MusicPlayer: broadcastStarted received", payload);
 
-		ms.addEventListener("sourceended", () => console.log("MusicPlayer: MediaSource ended"));
-		ms.addEventListener("sourceclose", () => console.log("MusicPlayer: MediaSource closed"));
-		ms.addEventListener("error", (e: any) => console.error("MusicPlayer: MediaSource error", e));
-		audio.addEventListener("error", () => {
-			const err = (audio.error && audio.error.message) || audio.error;
-			console.error("MusicPlayer: <audio> error", err);
-		}, { once: true });
-		audio.addEventListener("canplay", () => {
-			console.log("MusicPlayer: <audio> canplay");
-		});
-		audio.addEventListener("playing", () => {
-			console.log("MusicPlayer: <audio> playing");
-		});
-		audio.addEventListener("waiting", () => {
-			console.log("MusicPlayer: <audio> waiting");
+			const existing = pcRef.current;
+			if (existing) {
+				closePc();
+			}
+
+			const cfg = await ensureTurnConfig();
+			const turnConfig: RTCConfiguration = cfg ? { iceServers: cfg.iceServers as any } : {};
+			console.log("MusicPlayer: using RTCConfiguration", turnConfig ?? {});
+
+			const pc = new RTCPeerConnection(turnConfig);
+			pcRef.current = pc;
 			try {
-				const b = sourceBufferRef.current;
-				if (b && b.buffered && b.buffered.length > 0) {
-					const end = b.buffered.end(b.buffered.length - 1);
-					if (Number.isFinite(end)) {
-						const now = performance.now?.() || Date.now();
-						if (now - (lastSeekAtRef.current || 0) > 120) {
-							audio.currentTime = Math.max(0, end - LIVE_LATENCY_SEC);
-							lastSeekAtRef.current = now;
-						}
-					}
-				}
+				pc.onconnectionstatechange = () => console.log("MusicPlayer RTC connectionState:", pc.connectionState);
+				pc.oniceconnectionstatechange = () => console.log("MusicPlayer RTC iceConnectionState:", pc.iceConnectionState);
+				pc.onicegatheringstatechange = () => console.log("MusicPlayer RTC gatheringState:", pc.iceGatheringState);
 			} catch {}
-		});
-
-		const chosenType = chooseSupportedMimeType(String(mimeType));
-		if (!chosenType) {
-			console.warn("MusicPlayer: No supported MSE mimeType for", mimeType);
-			return;
-		}
-
-		ms.addEventListener("sourceopen", () => {
-			try {
-				try { (ms as any).duration = Infinity; } catch {}
-				const sb = ms.addSourceBuffer(chosenType);
-				sourceBufferRef.current = sb;
-				sb.mode = "sequence";
+			pc.onicecandidate = (ev) => {
+				if (ev.candidate) {
+					nuiPost("music_rtc_ice_to_broadcaster", { candidate: ev.candidate });
+				}
+			};
+			pc.ontrack = (ev) => {
+				const [stream] = ev.streams;
+				const audio = audioRef.current;
+				if (!audio) return;
 				try {
-					// Allow full timeline; we'll manage chasing in audio.currentTime
-					(sb as any).appendWindowStart = 0;
-					(sb as any).appendWindowEnd = Number.POSITIVE_INFINITY;
-				} catch {}
-				sb.addEventListener("error", (e) => {
-					console.error("MusicPlayer: SourceBuffer error", e);
-				});
-				sb.addEventListener("updateend", () => {
+					const track = ev.track;
+					console.log("MusicPlayer: ontrack", { kind: track?.kind, enabled: track?.enabled, muted: (track as any)?.muted });
 					try {
-						const a = audioRef.current;
-						const b = sourceBufferRef.current;
-						if (a && b && b.buffered && b.buffered.length > 0) {
-							const end = b.buffered.end(b.buffered.length - 1);
-							console.log("MusicPlayer: updateend, buffered end", end.toFixed(3), "currentTime", a.currentTime.toFixed(3));
-							if ((a.paused || a.ended) && (end - (a.currentTime || 0)) >= (LIVE_LATENCY_SEC * 0.8)) {
-								try { a.currentTime = Math.max(0, end - LIVE_LATENCY_SEC); } catch {}
-								a.play().then(() => setIsPlaying(true)).catch(() => {});
-							}
-							// Fallback: if first append happened but still paused after 1s, force a play attempt
-							if (firstAppendDoneRef.current) {
-								setTimeout(() => {
-									const aa = audioRef.current;
-									const bb = sourceBufferRef.current;
-									if (!aa || !bb) return;
-									if (aa.paused || aa.ended) {
-										try {
-											if (bb.buffered && bb.buffered.length > 0) {
-												const e2 = bb.buffered.end(bb.buffered.length - 1);
-												aa.currentTime = Math.max(0, e2 - LIVE_LATENCY_SEC);
-											}
-										} catch {}
-										aa.play().then(() => setIsPlaying(true)).catch(() => {});
-									}
-								}, 1000);
-							}
-							// Evict old data to keep buffer small and avoid quota / parser churn
-							try {
-								const start = b.buffered.start(0);
-								const safeKeepFrom = Math.max(0, a.currentTime - RETAIN_WINDOW_SEC);
-								if (start < safeKeepFrom && !b.updating) {
-									b.remove(0, safeKeepFrom);
-								}
-							} catch {}
-						}
+						(track as any).onmute = () => console.warn("MusicPlayer: inbound track muted");
+						(track as any).onunmute = () => console.warn("MusicPlayer: inbound track unmuted");
+						(track as any).onended = () => console.warn("MusicPlayer: inbound track ended");
 					} catch {}
-					tryAppend();
-				});
-				tryAppend();
-			} catch {
-				console.warn("MusicPlayer: addSourceBuffer failed for", chosenType);
-			}
-		}, { once: true });
+					(audio as any).srcObject = stream;
+					audio.autoplay = true;
+					audio.playsInline = true as any;
+					audio.muted = false;
+					audio.volume = 1.0;
+					audio.play().then(() => setIsPlaying(true)).catch((e) => {
+						console.error("MusicPlayer: audio.play() failed", e);
+					});
+					console.log("MusicPlayer: remote track attached");
+				} catch {}
+			};
+			try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch {}
 
-		// Defer play until we have enough buffered
-		setIsPlaying(false);
-		console.log("music:streamStart", payload);
+			const offer = await pc.createOffer({ offerToReceiveAudio: true });
+			await pc.setLocalDescription(offer);
+			console.log("MusicPlayer: created and set local offer");
+			await nuiPost("music_rtc_offer", { sdp: offer.sdp });
+			console.log("MusicPlayer: sent offer to broadcaster");
+		} catch {}
 	});
 
-	useNuiEvent("music:streamChunk", (msg: any) => {
+	useNuiEvent("music:rtc:answer", async (msg: any) => {
 		const payload = (msg && (msg.payload || msg.data)) || {};
-		const { streamId, base64, seq } = payload;
-		if (!streamId || streamId !== currentStreamIdRef.current) return;
-		if (!base64) return;
-		// Deduplicate out-of-order or duplicate chunks
-		const last = lastSeqRef.current[streamId] ?? -1;
-		const nseq = typeof seq === "number" ? seq : last + 1;
-		if (nseq <= last) return;
-		lastSeqRef.current[streamId] = nseq;
-		const ab = base64ToArrayBuffer(base64);
-		// Initialize next expected sequence on first arrival
-		if (nextSeqRef.current < 0) nextSeqRef.current = nseq;
-		// Drop ancient packets; store future packets
-		if (nseq < nextSeqRef.current) {
-			// too old; ignore
-		} else if (!chunkMapRef.current.has(nseq)) {
-			chunkMapRef.current.set(nseq, ab);
-		}
-		tryAppend();
-		console.log("music:streamChunk", payload);
-	});
-
-	useNuiEvent("music:streamStop", (msg: any) => {
-		const payload = (msg && (msg.payload || msg.data)) || {};
-		const { streamId } = payload;
-		if (!streamId || streamId !== currentStreamIdRef.current) return;
+		const { sdp } = payload || {};
+		const pc = pcRef.current;
+		if (!pc || !sdp) return;
 		try {
-			if (sourceBufferRef.current && mediaSourceRef.current?.readyState === "open") {
-				if (!sourceBufferRef.current.updating) {
-					mediaSourceRef.current.endOfStream();
-				} else {
-					sourceBufferRef.current.addEventListener("updateend", () => {
-						try { mediaSourceRef.current?.endOfStream(); } catch {}
-					}, { once: true });
-				}
+			await pc.setRemoteDescription({ type: "answer", sdp });
+			console.log("MusicPlayer: applied remote answer");
+		} catch {}
+	});
+
+	useNuiEvent("music:rtc:iceFromBroadcaster", async (msg: any) => {
+		const payload = (msg && (msg.payload || msg.data)) || {};
+		let { candidate } = payload || {};
+		const pc = pcRef.current;
+		if (!pc || !candidate) return;
+		try {
+			// Some bridges send candidate as a JSON string; normalize to object
+			if (typeof candidate === "string") {
+				try { candidate = JSON.parse(candidate); } catch {}
+			}
+			await pc.addIceCandidate(candidate as RTCIceCandidateInit);
+			console.log("MusicPlayer: added ICE candidate from broadcaster");
+		} catch {}
+	});
+
+	useNuiEvent("music:rtc:broadcastStopped", () => {
+		try {
+			const audio = audioRef.current;
+			if (audio) {
+				try { audio.pause(); } catch {}
+				try { audio.removeAttribute("src"); audio.load(); } catch {}
 			}
 		} catch {}
 		setIsPlaying(false);
+		closePc();
 	});
 
-	// Cleanup on unmount
 	useEffect(() => {
-		return () => {
+		// Optional: log connection and ICE state for debugging
+		const pc = pcRef.current;
+		if (pc) {
 			try {
-				if (sourceBufferRef.current) {
-					sourceBufferRef.current.removeEventListener("updateend", tryAppend);
-				}
+				pc.onconnectionstatechange = () => console.log("MusicPlayer RTC connectionState:", pc.connectionState);
+				pc.oniceconnectionstatechange = () => console.log("MusicPlayer RTC iceConnectionState:", pc.iceConnectionState);
+				pc.onicegatheringstatechange = () => console.log("MusicPlayer RTC gatheringState:", pc.iceGatheringState);
 			} catch {}
-			sourceBufferRef.current = null;
-			mediaSourceRef.current = null;
-			currentStreamIdRef.current = null;
-			try { chunkMapRef.current.clear(); } catch {}
-			nextSeqRef.current = -1;
+		}
+		return () => {
+			closePc();
 		};
 	}, []);
 
