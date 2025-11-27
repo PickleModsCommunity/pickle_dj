@@ -1093,6 +1093,7 @@ export default function MusicController() {
                     height: 28px;
                     border: none;
                     background: url('/nui/images/slider.png') no-repeat center center / contain;
+                    transform: rotate(90deg);
                     cursor: pointer;
                     margin-top: -11px; /* centers thumb on 6px track */
                     box-shadow: 0 2px 6px rgba(0,0,0,0.5);
