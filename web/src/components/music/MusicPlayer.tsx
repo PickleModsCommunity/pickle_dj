@@ -8,6 +8,10 @@ type TurnConfig = {
 export default function MusicPlayer() {
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const pcRef = useRef<RTCPeerConnection | null>(null);
+	const audioCtxRef = useRef<AudioContext | null>(null);
+	const streamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+	const gainRef = useRef<GainNode | null>(null);
+	const pannerRef = useRef<StereoPannerNode | PannerNode | null>(null);
 	const broadcasterRef = useRef<number | null>(null);
 	const [isPlaying, setIsPlaying] = useState(false);
 
@@ -129,7 +133,46 @@ export default function MusicPlayer() {
 					(audio as any).playsInline = true;
 					audio.muted = false;
 					audio.volume = 1.0;
-					audio.play().then(() => setIsPlaying(true)).catch((e) => {
+					audio.play().then(async () => {
+						// Build WebAudio graph from MediaStream directly; then mute element output
+						try {
+							// @ts-ignore
+							const Ctx = (window.AudioContext || (window as any).webkitAudioContext);
+							if (Ctx && !audioCtxRef.current) {
+								audioCtxRef.current = new Ctx();
+							}
+							const ctx = audioCtxRef.current;
+							if (ctx) {
+								if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+								// (Re)create nodes
+								try { (streamSourceRef.current as any)?.disconnect?.(); } catch {}
+								try { (gainRef.current as any)?.disconnect?.(); } catch {}
+								try { (pannerRef.current as any)?.disconnect?.(); } catch {}
+								streamSourceRef.current = ctx.createMediaStreamSource(stream);
+								if (!gainRef.current) { gainRef.current = ctx.createGain(); }
+								gainRef.current.gain.value = 1.0;
+								if (!pannerRef.current) {
+									if (typeof (ctx as any).createStereoPanner === 'function') {
+										pannerRef.current = (ctx as any).createStereoPanner();
+										(pannerRef.current as StereoPannerNode).pan.value = 0.0;
+									} else {
+										const pn = ctx.createPanner();
+										pn.panningModel = 'equalpower';
+										pn.distanceModel = 'inverse';
+										try { pn.setPosition(0, 0, 1); } catch {}
+										pannerRef.current = pn;
+									}
+								}
+								// Connect: stream -> gain -> panner -> destination
+								streamSourceRef.current.connect(gainRef.current);
+								(gainRef.current as any).connect(pannerRef.current as any);
+								(pannerRef.current as any).connect(ctx.destination);
+								// mute element output to avoid double playback
+								audio.muted = true;
+							}
+						} catch {}
+						setIsPlaying(true)
+					}).catch((e) => {
 						console.error("MusicPlayer: audio.play() failed", e);
 					});
 					console.log("MusicPlayer: remote track attached");
@@ -179,6 +222,9 @@ export default function MusicPlayer() {
 				try { audio.removeAttribute("src"); audio.load(); } catch {}
 				try { audio.volume = 0.0; } catch {}
 			}
+			try { (streamSourceRef.current as any)?.disconnect?.(); } catch {}
+			try { (gainRef.current as any)?.disconnect?.(); } catch {}
+			try { (pannerRef.current as any)?.disconnect?.(); } catch {}
 		} catch {}
 		setIsPlaying(false);
 		closePc();
@@ -193,6 +239,25 @@ export default function MusicPlayer() {
 		const audio = audioRef.current;
 		if (!audio) return;
 		try { audio.volume = vol; } catch {}
+		try { if (gainRef.current) gainRef.current.gain.value = vol; } catch {}
+	});
+
+	// Directional panning control from client proximity loop
+	useNuiEvent("music:setPanning", (msg: any) => {
+		const data = (msg && (msg.payload || msg.data)) || {};
+		const panRaw = typeof data.pan === "number" ? data.pan : null;
+		if (panRaw == null) return;
+		const pan = Math.max(-1, Math.min(1, panRaw));
+		try {
+			const p = pannerRef.current as any;
+			if (!p) return;
+			if (typeof p.pan?.setValueAtTime === "function" && audioCtxRef.current) {
+				p.pan.setValueAtTime(pan, audioCtxRef.current.currentTime);
+			} else if (typeof p.setPosition === "function") {
+				// map pan to x-axis [-1,1] at z=1
+				p.setPosition(pan, 0, 1);
+			}
+		} catch {}
 	});
 
 	useEffect(() => {

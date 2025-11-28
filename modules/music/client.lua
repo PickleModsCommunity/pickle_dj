@@ -201,7 +201,6 @@ CreateThread(function()
 		local nearestId = nil
 		local nearestDist = 999999.0
 		for id, inst in pairs(MusicInstances) do
-			print("[MSC] INST", id, inst.streamId, inst.broadcaster, inst.coords)
 			if inst and inst.streamId ~= nil and inst.broadcaster ~= nil and inst.coords ~= nil then
 				local dist = #(pcoords - inst.coords)
 				if dist < nearestDist then
@@ -234,7 +233,7 @@ CreateThread(function()
 					}
 				})
 			end
-			-- Distance-based linear attenuation
+			-- Distance-based linear attenuation (0..1)
 			local vol = 1.0 - (nearestDist / radius)
 			if vol < 0.0 then vol = 0.0 end
 			if vol > 1.0 then vol = 1.0 end
@@ -242,6 +241,35 @@ CreateThread(function()
 				type = 'music:setVolume',
 				payload = { volume = vol }
 			})
+			local inst2 = MusicInstances[nearestId]
+			local toSrcX = (inst2.coords.x - pcoords.x)
+			local toSrcY = (inst2.coords.y - pcoords.y)
+			local len = math.sqrt(toSrcX * toSrcX + toSrcY * toSrcY)
+			if len > 0.0001 then
+				toSrcX = toSrcX / len
+				toSrcY = toSrcY / len
+				local camRot = GetGameplayCamRot(0) or vector3(0.0, 0.0, 0.0)
+				local heading = camRot.z or 0.0
+				local rad = math.rad(heading)
+				-- GTA/FiveM: heading 0 faces north (positive Y). Forward vector:
+				-- fx = -sin(heading), fy = cos(heading)
+				local fx = -math.sin(rad)
+				local fy = math.cos(rad)
+				local rx = fy
+				local ry = -fx
+				local pan = (toSrcX * rx) + (toSrcY * ry)
+				if pan < -1.0 then pan = -1.0 end
+				if pan > 1.0 then pan = 1.0 end
+				SendNUIMessage({
+					type = 'music:setPanning',
+					payload = { pan = pan }
+				})
+			else
+				SendNUIMessage({
+					type = 'music:setPanning',
+					payload = { pan = 0.0 }
+				})
+			end
 		else
 			if CurrentListeningInstanceId ~= nil then
 				-- Leave current instance
@@ -250,10 +278,13 @@ CreateThread(function()
 					type = 'music:rtc:broadcastStopped',
 					payload = {}
 				})
-				-- Ensure volume is zeroed when out of range
 				SendNUIMessage({
 					type = 'music:setVolume',
 					payload = { volume = 0.0 }
+				})
+				SendNUIMessage({
+					type = 'music:setPanning',
+					payload = { pan = 0.0 }
 				})
 			end
 		end
