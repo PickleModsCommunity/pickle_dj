@@ -1,7 +1,4 @@
-CreateThread(function()
-    Wait(1000)
-    SetNuiFocus(true, true)
-end)
+
 
 -- Simple NUI echo bridge for local testing of MusicController -> Client -> MusicPlayer
 -- Receives POSTs from NUI (fetch to https://<resource>/<name>) and immediately

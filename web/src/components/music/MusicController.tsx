@@ -50,6 +50,7 @@ export default function MusicController() {
 
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
+    const [visible, setVisible] = useState(false);
 
     // Tempo and BPM states
     useEffect(() => {
@@ -960,7 +961,11 @@ export default function MusicController() {
         return `${m}:${r.toString().padStart(2, "0")}`;
     };
 
-    return (decks.track_1 && decks.track_2) ? (
+    useNuiEvent("music:setControllerVisible", (data: any) => {
+        setVisible(data.visible);
+    });
+
+    return (decks.track_1 && decks.track_2 && visible) ? (
         <div className="bg-background" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {/* Local styles for vinyl visuals and controls */}
             <style>

@@ -51,7 +51,7 @@ export function AppControls({controls} : {controls?: {key: string, label: any}[]
 
 function App() {
   return (
-    <div className="dark w-screen h-screen absolute text-primary top-0 left-0" style={{background: "grey"}}>
+    <div className="dark w-screen h-screen absolute text-primary top-0 left-0">
       <MusicController />
       <MusicPlayer />
     </div>

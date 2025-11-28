@@ -126,7 +126,7 @@ export default function MusicPlayer() {
 					} catch {}
 					(audio as any).srcObject = stream;
 					audio.autoplay = true;
-					audio.playsInline = true as any;
+					(audio as any).playsInline = true;
 					audio.muted = false;
 					audio.volume = 1.0;
 					audio.play().then(() => setIsPlaying(true)).catch((e) => {
@@ -177,10 +177,22 @@ export default function MusicPlayer() {
 			if (audio) {
 				try { audio.pause(); } catch {}
 				try { audio.removeAttribute("src"); audio.load(); } catch {}
+				try { audio.volume = 0.0; } catch {}
 			}
 		} catch {}
 		setIsPlaying(false);
 		closePc();
+	});
+
+	// Distance-based attenuation (volume control from client proximity loop)
+	useNuiEvent("music:setVolume", (msg: any) => {
+		const data = (msg && (msg.payload || msg.data)) || {};
+		const volRaw = typeof data.volume === "number" ? data.volume : null;
+		if (volRaw == null) return;
+		const vol = Math.max(0, Math.min(1, volRaw));
+		const audio = audioRef.current;
+		if (!audio) return;
+		try { audio.volume = vol; } catch {}
 	});
 
 	useEffect(() => {

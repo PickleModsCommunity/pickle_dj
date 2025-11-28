@@ -1,5 +1,29 @@
-local CURRENT_BROADCASTER = nil
-local CURRENT_STREAM_ID = nil
+local MusicInstances = {}
+
+function CreateMusicInstance(name, coords, heading)
+    local instance = {
+        name = name,
+        coords = coords,
+        heading = heading,
+        broadcaster = nil,
+        streamId = nil,
+    }
+    local id
+    repeat 
+        id = math.random(1, 999999)
+    until not MusicInstances[id]
+    MusicInstances[id] = instance
+	-- broadcast creation to all clients
+	TriggerClientEvent("music:musicInstanceUpdated", -1, id, instance)
+    return id
+end
+
+CreateThread(function()
+    for _, instance in pairs(Config.MusicLocations) do
+        CreateMusicInstance(instance.name, instance.coords, instance.heading)
+        print(("Created music instance %s at %s"):format(instance.name, json.encode(instance.coords)))
+    end
+end)
 
 -- TURN ICE config is fetched from Cloudflare's ephemeral credentials endpoint at runtime.
 
@@ -58,15 +82,22 @@ local function sendTurnConfigTo(targetSrc)
 	TriggerClientEvent('music:rtc:turnConfig', targetSrc, json.encode(stunOnly))
 end
 
+-- Allow clients to request a full sync of all music instances
+RegisterNetEvent("music:requestSync", function()
+	local src = tonumber(source)
+	TriggerClientEvent("music:syncMusicInstances", src, MusicInstances)
+end)
+
 AddEventHandler('playerDropped', function()
 	local src = tonumber(source)
-	if CURRENT_BROADCASTER ~= nil and src == CURRENT_BROADCASTER then
-		CURRENT_BROADCASTER = nil
-		CURRENT_STREAM_ID = nil
-		local players = GetPlayers()
-		for i=1, #players do
-			local player = tonumber(players[i])
-			TriggerClientEvent('music:rtc:broadcastStopped', player, json.encode({}))
+	-- If a player was a broadcaster for any instance, clear those instances
+	for id, inst in pairs(MusicInstances) do
+		if inst.broadcaster ~= nil and inst.broadcaster == src then
+			inst.broadcaster = nil
+			inst.streamId = nil
+			TriggerClientEvent("music:musicInstanceUpdated", -1, id, inst)
+			-- legacy broadcastStopped for compatibility
+			TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
 		end
 	end
 end)
@@ -83,61 +114,106 @@ RegisterNetEvent('music:rtc:announceBroadcast', function(data, datalen)
 		local ok, parsed = pcall(function() return json.decode(data or "{}") end)
 		if ok and type(parsed) == "table" then payload = parsed end
 	end
-	local streamId = payload.streamId or tostring(src) .. "_" .. tostring(math.random(100000, 999999))
-	CURRENT_BROADCASTER = src
-	CURRENT_STREAM_ID = streamId
-	print(("[music] broadcast announced by %s streamId=%s"):format(src, streamId))
-	local players = GetPlayers()
-	for i=1, #players do
-		local player = tonumber(players[i])
-		TriggerClientEvent('music:rtc:broadcastStarted', player, json.encode({ streamId = streamId, broadcaster = src }))
+	local instanceId = tonumber(payload.instanceId or -1)
+	if instanceId == nil or MusicInstances[instanceId] == nil then
+		print("[music] announceBroadcast invalid instanceId", payload.instanceId)
+		return
 	end
+	local inst = MusicInstances[instanceId]
+	-- Only allow one broadcaster per instance; replace if same src, ignore if different and already active
+	if inst.broadcaster ~= nil and inst.broadcaster ~= src then
+		print(("[music] instance %s already broadcasting by %s; reject %s"):format(instanceId, inst.broadcaster, src))
+		return
+	end
+	local streamId = payload.streamId or tostring(src) .. "_" .. tostring(math.random(100000, 999999))
+	inst.broadcaster = src
+	inst.streamId = streamId
+	print(("[music] instance %s broadcast announced by %s streamId=%s"):format(instanceId, src, streamId))
+	-- Push updated instance to clients
+	TriggerClientEvent("music:musicInstanceUpdated", -1, instanceId, inst)
+	-- legacy: notify broadcast started (clients may use proximity and ignore)
+	TriggerClientEvent('music:rtc:broadcastStarted', -1, json.encode({ streamId = streamId, broadcaster = src }))
 end)
 
 RegisterNetEvent('music:rtc:stopBroadcast', function()
 	local src = tonumber(source)
-	if CURRENT_BROADCASTER ~= nil and src == CURRENT_BROADCASTER then
-		CURRENT_BROADCASTER = nil
-		CURRENT_STREAM_ID = nil
-		local players = GetPlayers()
-		for i=1, #players do
-			local player = tonumber(players[i])
-			TriggerClientEvent('music:rtc:broadcastStopped', player, json.encode({}))
+	-- Stop any instance that this source is broadcasting
+	for id, inst in pairs(MusicInstances) do
+		if inst.broadcaster ~= nil and inst.broadcaster == src then
+			inst.broadcaster = nil
+			inst.streamId = nil
+			print(("[music] instance %s broadcast stopped by %s"):format(id, src))
+			TriggerClientEvent("music:musicInstanceUpdated", -1, id, inst)
+			-- legacy
+			TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
 		end
 	end
 end)
 
 RegisterNetEvent('music:rtc:offer', function(data, datalen)
 	local src = tonumber(source)
-	if CURRENT_BROADCASTER == nil then return end
-	-- Forward listener offer to broadcaster
-	print(("[music] offer from %s -> broadcaster %s, sdpLen=%s"):format(src, CURRENT_BROADCASTER, tostring(datalen)))
-	TriggerClientEvent('music:rtc:offer', CURRENT_BROADCASTER, json.encode({ from = src, sdp = data }))
+	-- Expect data to be a JSON payload with instanceId and sdp
+	local payload = {}
+	do
+		local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+		if ok and type(parsed) == "table" then payload = parsed end
+	end
+	local instanceId = tonumber(payload.instanceId or -1)
+	if instanceId == nil or MusicInstances[instanceId] == nil then return end
+	local inst = MusicInstances[instanceId]
+	if inst.broadcaster == nil then return end
+	-- Forward listener offer to the instance broadcaster
+	print(("[music] offer (inst %s) from %s -> broadcaster %s, sdpLen=%s"):format(instanceId, src, inst.broadcaster, tostring(datalen)))
+	TriggerClientEvent('music:rtc:offer', inst.broadcaster, json.encode({ instanceId = instanceId, from = src, sdp = payload.sdp or "" }))
 end)
 
 RegisterNetEvent('music:rtc:answer', function(targetId, sdp)
 	local src = tonumber(source)
-	if CURRENT_BROADCASTER == nil then return end
-	if src ~= CURRENT_BROADCASTER then return end
+	-- For multi-instance, answer must be from a broadcaster of some instance.
 	local toId = tonumber(targetId)
 	if not toId then return end
-	print(("[music] answer from broadcaster %s -> %s, sdpLen=%s"):format(src, toId, tostring(#(sdp or ""))))
-	TriggerClientEvent('music:rtc:answer', toId, json.encode({ sdp = sdp }))
+	-- Find the instance the src is broadcasting
+	local broadcasterInstanceId = nil
+	for id, inst in pairs(MusicInstances) do
+		if inst.broadcaster ~= nil and inst.broadcaster == src then
+			broadcasterInstanceId = id
+			break
+		end
+	end
+	if not broadcasterInstanceId then return end
+	print(("[music] answer (inst %s) from broadcaster %s -> %s, sdpLen=%s"):format(broadcasterInstanceId, src, toId, tostring(#(sdp or ""))))
+	TriggerClientEvent('music:rtc:answer', toId, json.encode({ instanceId = broadcasterInstanceId, sdp = sdp }))
 end)
 
-RegisterNetEvent('music:rtc:iceToBroadcaster', function(candidate)
+RegisterNetEvent('music:rtc:iceToBroadcaster', function(data)
 	local src = tonumber(source)
-	if CURRENT_BROADCASTER == nil then return end
-	print(("[music] ice to broadcaster from %s"):format(src))
-	TriggerClientEvent('music:rtc:iceFromListener', CURRENT_BROADCASTER, json.encode({ from = src, candidate = candidate }))
+	-- Expect data to be a JSON payload: { instanceId, candidate }
+	local payload = {}
+	do
+		local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+		if ok and type(parsed) == "table" then payload = parsed end
+	end
+	local instanceId = tonumber(payload.instanceId or -1)
+	if instanceId == nil or MusicInstances[instanceId] == nil then return end
+	local inst = MusicInstances[instanceId]
+	if inst.broadcaster == nil then return end
+	print(("[music] ice to broadcaster (inst %s) from %s"):format(instanceId, src))
+	TriggerClientEvent('music:rtc:iceFromListener', inst.broadcaster, json.encode({ instanceId = instanceId, from = src, candidate = payload.candidate }))
 end)
 
 RegisterNetEvent('music:rtc:iceToListener', function(targetId, candidate)
 	local src = tonumber(source)
-	if CURRENT_BROADCASTER == nil then return end
-	if src ~= CURRENT_BROADCASTER then return end
+	-- ICE from broadcaster to listener; ensure src is an active broadcaster of some instance
 	local toId = tonumber(targetId)
 	if not toId then return end
-	print(("[music] ice to listener %s from broadcaster %s"):format(toId, src))
-	TriggerClientEvent('music:rtc:iceFromBroadcaster', toId, json.encode({ candidate = candidate }))
+	local broadcasterInstanceId = nil
+	for id, inst in pairs(MusicInstances) do
+		if inst.broadcaster ~= nil and inst.broadcaster == src then
+			broadcasterInstanceId = id
+			break
+		end
+	end
+	if not broadcasterInstanceId then return end
+	print(("[music] ice to listener %s from broadcaster %s (inst %s)"):format(toId, src, broadcasterInstanceId))
+	TriggerClientEvent('music:rtc:iceFromBroadcaster', toId, json.encode({ instanceId = broadcasterInstanceId, candidate = candidate }))
 end)
