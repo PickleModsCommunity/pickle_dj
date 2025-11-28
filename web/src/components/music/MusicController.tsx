@@ -38,6 +38,13 @@ export default function MusicController() {
     const broadcastBusRef = useRef<GainNode | null>(null);
     const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
     const [isBroadcasting, setIsBroadcasting] = useState(false);
+    // Mic capture/mix
+    const micStreamRef = useRef<MediaStream | null>(null);
+    const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+    const micGainRef = useRef<GainNode | null>(null);
+    const [isMicOn, setIsMicOn] = useState(false);
+    const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+    const [selectedMicId, setSelectedMicId] = useState<string | "default" | null>(null);
 
     const peerMapRef = useRef<Record<number, RTCPeerConnection>>({});
     const outboundTrackRef = useRef<MediaStreamTrack | null>(null);
@@ -292,6 +299,19 @@ export default function MusicController() {
             (window as any).__musicIsBroadcaster = false;
             (window as any).__musicBroadcastStreamId = null;
         } catch {}
+        // turn off mic if enabled
+        try {
+            if (isMicOn) {
+                // disconnect and stop
+                try { micSourceRef.current?.disconnect(); } catch {}
+                try { micGainRef.current?.disconnect(); } catch {}
+                try { micStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch {} }); } catch {}
+                micSourceRef.current = null;
+                micGainRef.current = null;
+                micStreamRef.current = null;
+                setIsMicOn(false);
+            }
+        } catch {}
     };
 
     const ensureBroadcasterPeer = async (listenerId: number): Promise<RTCPeerConnection | null> => {
@@ -382,6 +402,11 @@ export default function MusicController() {
             if (isBroadcasting) {
                 stopBroadcast();
             }
+            // mic cleanup on unmount
+            try { micSourceRef.current?.disconnect(); } catch {}
+            try { micGainRef.current?.disconnect(); } catch {}
+            try { micStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch {} }); } catch {}
+            try { navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange); } catch {}
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isBroadcasting]);
@@ -965,6 +990,81 @@ export default function MusicController() {
         setVisible(data.visible);
     });
 
+    // Mic toggle handlers
+    const enableMic = async () => {
+        if (isMicOn) return;
+        try {
+            const ctx = audioCtxRef.current;
+            const bus = broadcastBusRef.current;
+            if (!ctx || !bus) return;
+            try { await ctx.resume?.(); } catch {}
+            const audioConstraints: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true } as any;
+            if (selectedMicId && selectedMicId !== "default") {
+                (audioConstraints as any).deviceId = { exact: selectedMicId };
+            }
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+            const source = ctx.createMediaStreamSource(stream);
+            const gain = ctx.createGain();
+            gain.gain.value = 1.0;
+            source.connect(gain);
+            gain.connect(bus);
+            micStreamRef.current = stream;
+            micSourceRef.current = source;
+            micGainRef.current = gain;
+            setIsMicOn(true);
+            // After permission, refresh device labels
+            try { await enumerateMicDevices(); } catch {}
+        } catch (e) {
+            console.error("MusicController: enableMic failed", e);
+        }
+    };
+    const disableMic = () => {
+        if (!isMicOn) return;
+        try { micSourceRef.current?.disconnect(); } catch {}
+        try { micGainRef.current?.disconnect(); } catch {}
+        try { micStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch {} }); } catch {}
+        micSourceRef.current = null;
+        micGainRef.current = null;
+        micStreamRef.current = null;
+        setIsMicOn(false);
+    };
+    const toggleMic = async () => {
+        if (isMicOn) return disableMic();
+        await enableMic();
+    };
+    // When changing device while mic is on, hot-switch by restarting mic
+    useEffect(() => {
+        (async () => {
+            if (isMicOn) {
+                try { disableMic(); } catch {}
+                await enableMic();
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedMicId]);
+
+    // Enumerate audio input devices
+    const enumerateMicDevices = async () => {
+        try {
+            const list = await navigator.mediaDevices?.enumerateDevices?.();
+            if (!list) return;
+            const inputs = list.filter(d => d.kind === "audioinput");
+            setMicDevices(inputs);
+            // Initialize selection if none yet
+            if (selectedMicId == null) {
+                const def = inputs.find(d => d.deviceId === "default") || inputs[0];
+                setSelectedMicId(def ? def.deviceId : null);
+            }
+        } catch {}
+    };
+    const onDeviceChange = () => { enumerateMicDevices(); };
+    useEffect(() => {
+        enumerateMicDevices();
+        try { navigator.mediaDevices?.addEventListener?.("devicechange", onDeviceChange); } catch {}
+        return () => { try { navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange); } catch {} };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     return (decks.track_1 && decks.track_2 && visible) ? (
         <div className="bg-background" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {/* Local styles for vinyl visuals and controls */}
@@ -1347,6 +1447,33 @@ export default function MusicController() {
                                         Stop Broadcast
                                     </button>
                                 )}
+                                <button
+                                    className="resetBtn"
+                                    onClick={toggleMic}
+                                    aria-label={isMicOn ? "Turn off mic" : "Turn on mic"}
+                                    title={isMicOn ? "Turn off mic" : "Turn on mic"}
+                                >
+                                    {isMicOn ? "Mic Off" : "Mic On"}
+                                </button>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <label htmlFor="micDevice" style={{ opacity: 0.85 }}>Mic</label>
+                                    <select
+                                        id="micDevice"
+                                        value={selectedMicId ?? ""}
+                                        onChange={(e) => setSelectedMicId(e.target.value || null)}
+                                        style={{ background: "#0f0f0f", color: "#eee", border: "1px solid #333", borderRadius: 6, padding: "4px 6px" }}
+                                    >
+                                        {micDevices.length === 0 ? (
+                                            <option value="">No inputs</option>
+                                        ) : (
+                                            micDevices.map((d, idx) => (
+                                                <option key={d.deviceId || idx} value={d.deviceId}>
+                                                    {d.label || `Microphone ${idx + 1}`}
+                                                </option>
+                                            ))
+                                        )}
+                                    </select>
+                                </div>
                             </div>
                             <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
                                 {Object.keys(decks).map(function(deck) {

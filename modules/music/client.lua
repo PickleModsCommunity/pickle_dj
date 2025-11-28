@@ -136,6 +136,11 @@ RegisterNetEvent('music:rtc:broadcastStarted', function(data)
 	local payload = {}
 	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
 	if ok and type(parsed) == "table" then payload = parsed end
+	-- Prevent broadcaster from listening to their own stream unless DebugListen is true
+	local myId = GetPlayerServerId(PlayerId())
+	if not (Config and Config.DebugListen) and payload.broadcaster == myId then
+		return
+	end
 	SendNUIMessage({
 		type = 'music:rtc:broadcastStarted',
 		payload = {
@@ -222,6 +227,16 @@ CreateThread(function()
 					})
 				end
 				local inst = MusicInstances[nearestId]
+				-- If I'm the broadcaster and DebugListen is false, do not start listening
+				local myId = GetPlayerServerId(PlayerId())
+				if not (Config and Config.DebugListen) and inst.broadcaster == myId then
+					CurrentListeningInstanceId = nil
+					-- ensure UI is stopped and volume/pan reset
+					SendNUIMessage({ type = 'music:rtc:broadcastStopped', payload = {} })
+					SendNUIMessage({ type = 'music:setVolume', payload = { volume = 0.0 } })
+					SendNUIMessage({ type = 'music:setPanning', payload = { pan = 0.0 } })
+					goto __after_listen_tick
+				end
 				CurrentListeningInstanceId = nearestId
 				print("[MSC] START BROADCAST", nearestId)
 				SendNUIMessage({
@@ -288,6 +303,7 @@ CreateThread(function()
 				})
 			end
 		end
+		::__after_listen_tick::
 		Wait(wait)
 	end
 end)
