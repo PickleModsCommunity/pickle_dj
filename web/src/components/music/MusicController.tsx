@@ -33,10 +33,11 @@ export default function MusicController() {
     }, []);
     // Web Audio routing
     const audioCtxRef = useRef<AudioContext | null>(null);
-    const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode }>>({});
+    const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode; analyser?: AnalyserNode }>>({});
     const masterBusRef = useRef<GainNode | null>(null);
     const broadcastBusRef = useRef<GainNode | null>(null);
     const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+    const masterAnalyserRef = useRef<AnalyserNode | null>(null);
     const [isBroadcasting, setIsBroadcasting] = useState(false);
     // Mic capture/mix
     const micStreamRef = useRef<MediaStream | null>(null);
@@ -58,6 +59,9 @@ export default function MusicController() {
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
     const [visible, setVisible] = useState(false);
+    // VU meters (0..1 normalized)
+    const [vuLevels, setVuLevels] = useState<Record<string, number>>({ track_1: 0, track_2: 0 });
+    const [masterVu, setMasterVu] = useState<number>(0);
 
     // Tempo and BPM states
     useEffect(() => {
@@ -126,6 +130,14 @@ export default function MusicController() {
         const broadcastBus = ctx.createGain();
         broadcastBus.gain.value = 1.0;
         broadcastBusRef.current = broadcastBus;
+        // Master analyser (tap the master bus)
+        try {
+            const masterAnalyser = ctx.createAnalyser();
+            masterAnalyser.smoothingTimeConstant = 0.8;
+            masterAnalyser.fftSize = 1024;
+            masterBus.connect(masterAnalyser);
+            masterAnalyserRef.current = masterAnalyser;
+        } catch {}
         try {
             const streamDest = ctx.createMediaStreamDestination();
             streamDestRef.current = streamDest;
@@ -137,14 +149,21 @@ export default function MusicController() {
             const source = ctx.createMediaElementSource(el);
             const gain = ctx.createGain();
             const panner = ctx.createStereoPanner();
+            let analyser: AnalyserNode | undefined;
+            try {
+                analyser = ctx.createAnalyser();
+                analyser.smoothingTimeConstant = 0.8;
+                analyser.fftSize = 1024;
+            } catch {}
             // Route each deck into master bus (for monitoring via panners)
             // and also into broadcast bus (pre-panner) so monitoring pan doesn't affect stream
             source.connect(gain);
             gain.connect(panner).connect(masterBus);
+            try { if (analyser) { gain.connect(analyser); } } catch {}
             try {
                 broadcastBusRef.current && gain.connect(broadcastBusRef.current);
             } catch {}
-            return { source, gain, panner };
+            return { source, gain, panner, analyser };
         };
 
         nodesRef.current["track_1"] = makeChain(t1);
@@ -986,6 +1005,33 @@ export default function MusicController() {
         return `${m}:${r.toString().padStart(2, "0")}`;
     };
 
+    // Simple segmented digital VU meter (bottom-up 12 segments)
+    function VuMeter({ level, height = 80 }: { level: number; height?: number }) {
+        const segments = 12;
+        const lit = Math.max(0, Math.min(segments, Math.round(level * segments)));
+        const segs = [];
+        for (let i = 0; i < segments; i++) {
+            const idxFromBottom = i + 1;
+            const on = idxFromBottom <= lit;
+            let color = "#18a058"; // green
+            const frac = idxFromBottom / segments;
+            if (frac >= 0.85) color = "#d64545"; // red
+            else if (frac >= 0.65) color = "#c8a43b"; // amber
+            segs.push(
+                <div
+                    key={i}
+                    className="vuSeg"
+                    style={{ background: on ? color : undefined }}
+                />
+            );
+        }
+        return (
+            <div className="vu" style={{ height }}>
+                {segs}
+            </div>
+        );
+    }
+
     useNuiEvent("music:setControllerVisible", (data: any) => {
         setVisible(data.visible);
     });
@@ -1063,6 +1109,53 @@ export default function MusicController() {
         try { navigator.mediaDevices?.addEventListener?.("devicechange", onDeviceChange); } catch {}
         return () => { try { navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange); } catch {} };
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // --- VU meter sampling loop ---
+    useEffect(() => {
+        let raf = 0;
+        const computeLevel = (an: AnalyserNode | null | undefined): number => {
+            if (!an) return 0;
+            const size = an.fftSize || 1024;
+            const buf = new Float32Array(size);
+            try {
+                an.getFloatTimeDomainData(buf);
+            } catch {
+                return 0;
+            }
+            let sumSq = 0;
+            let peak = 0;
+            for (let i = 0; i < buf.length; i++) {
+                const v = buf[i];
+                sumSq += v * v;
+                const a = v < 0 ? -v : v;
+                if (a > peak) peak = a;
+            }
+            const rms = Math.sqrt(sumSq / (buf.length || 1));
+            // Map to 0..1 with ~60 dB dynamic window; mix RMS and peak for responsiveness
+            const db = 20 * Math.log10(rms + 1e-8);
+            let norm = (db + 60) / 60;
+            if (norm < 0) norm = 0;
+            if (norm > 1) norm = 1;
+            const mixed = Math.max(norm * 0.7 + peak * 0.3, 0);
+            return mixed > 1 ? 1 : mixed;
+        };
+        const tick = () => {
+            const a1 = nodesRef.current["track_1"]?.analyser;
+            const a2 = nodesRef.current["track_2"]?.analyser;
+            const am = masterAnalyserRef.current;
+            const l1 = computeLevel(a1);
+            const l2 = computeLevel(a2);
+            const lm = computeLevel(am);
+            setVuLevels(prev => {
+                const n = { ...prev, track_1: l1, track_2: l2 };
+                return (prev.track_1 !== n.track_1 || prev.track_2 !== n.track_2) ? n : prev;
+            });
+            setMasterVu(prev => (Math.abs(prev - lm) > 0.01 ? lm : prev));
+            raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
     }, []);
 
     return (decks.track_1 && decks.track_2 && visible) ? (
@@ -1364,6 +1457,24 @@ export default function MusicController() {
                     margin: 6px 0;
                     border: none;
                 }
+                /* Digital VU meter */
+                .vu {
+                    width: 10px;
+                    height: 80px;
+                    background: #0b0b0b;
+                    border: 1px solid #333;
+                    border-radius: 3px;
+                    display: flex;
+                    flex-direction: column-reverse;
+                    padding: 1px;
+                    gap: 1px;
+                }
+                .vuSeg {
+                    flex: 1;
+                    min-height: 4px;
+                    border-radius: 1px;
+                    background: #1e1e1e;
+                }
                 `}
             </style>
             <div style={{ display: "flex", gap: 16 }}>
@@ -1396,16 +1507,19 @@ export default function MusicController() {
                                 </div>
                                 <div className="vGroup">
                                     <span>Master</span>
-                                    <input
-                                        className="range vRange vOpposite"
-                                        type="range"
-                                        min={0}
-                                        max={100}
-                                        step={1}
-                                        value={Math.round(masterVolume * 100)}
-                                        onChange={(e) => setMasterVolume(Number(e.target.value) / 100)}
-                                        aria-label="Master volume"
-                                    />
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        <input
+                                            className="range vRange vOpposite"
+                                            type="range"
+                                            min={0}
+                                            max={100}
+                                            step={1}
+                                            value={Math.round(masterVolume * 100)}
+                                            onChange={(e) => setMasterVolume(Number(e.target.value) / 100)}
+                                            aria-label="Master volume"
+                                        />
+                                        <VuMeter level={masterVu} />
+                                    </div>
                                     <span>{Math.round(masterVolume * 100)}%</span>
                                     <button
                                         className="resetBtn"
@@ -1615,19 +1729,22 @@ export default function MusicController() {
                                             </div>
                                             <div className="vGroup">
                                                 <span>Volume</span>
-                                                <input
-                                                    className="range vRange"
-                                                    type="range"
-                                                    min={0}
-                                                    max={100}
-                                                    step={1}
-                                                    value={Math.round((decks[deck].deckVolume ?? 1) * 100)}
-                                                    onChange={(e) => {
-                                                        const v = Number(e.target.value) / 100;
-                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: v } }));
-                                                    }}
-                                                    aria-label={`${deck} volume`}
-                                                />
+                                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                                    <input
+                                                        className="range vRange"
+                                                        type="range"
+                                                        min={0}
+                                                        max={100}
+                                                        step={1}
+                                                        value={Math.round((decks[deck].deckVolume ?? 1) * 100)}
+                                                        onChange={(e) => {
+                                                            const v = Number(e.target.value) / 100;
+                                                            setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: v } }));
+                                                        }}
+                                                        aria-label={`${deck} volume`}
+                                                    />
+                                                    <VuMeter level={vuLevels[deck] ?? 0} />
+                                                </div>
                                                 <span>{Math.round((decks[deck].deckVolume ?? 1) * 100)}%</span>
                                                 <button
                                                     className="resetBtn"
