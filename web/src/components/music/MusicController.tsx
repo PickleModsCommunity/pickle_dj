@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNuiEvent } from "../../providers/nui/useNui";
+import RangeControl, { VuMeter } from "./RangeControl";
+import { Mic, MicOff, Plus } from "lucide-react";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -17,15 +19,15 @@ type PlaylistItem = {
     id: string;
     title: string;
     src: string; // url or object URL
-    sourceType: "url" | "file" | "youtube";
+    sourceType: "url" | "file";
     baseBpm?: number | null;
-    youtubeId?: string;
 };
 
 export default function MusicController() {
     const [decks, setDecks] = useState<Record<string, Deck>>({});
+    const decksRef = useRef<Record<string, Deck>>({});
     const [crossfade, setCrossfade] = useState(0.5); // 0 = left only, 1 = right only
-    const [masterVolume, setMasterVolume] = useState(0.6); // overall gain cap
+    const [masterVolume, setMasterVolume] = useState(1); // overall gain cap
 
     useEffect(() => {
         console.log("MusicController: mounted");
@@ -38,6 +40,7 @@ export default function MusicController() {
     const broadcastBusRef = useRef<GainNode | null>(null);
     const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
     const masterAnalyserRef = useRef<AnalyserNode | null>(null);
+	const micAnalyserRef = useRef<AnalyserNode | null>(null);
     const [isBroadcasting, setIsBroadcasting] = useState(false);
     // Mic capture/mix
     const micStreamRef = useRef<MediaStream | null>(null);
@@ -51,24 +54,24 @@ export default function MusicController() {
     const outboundTrackRef = useRef<MediaStreamTrack | null>(null);
     const streamIdRef = useRef<string | null>(null);
 
-    // YouTube players per deck
-    const ytPlayersRef = useRef<Record<string, any>>({});
-    const ytReadyRef = useRef<boolean>(false);
-    const ytTimersRef = useRef<Record<string, number | null>>({});
+    // (YouTube compatibility removed)
 
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
     const [visible, setVisible] = useState(false);
     // VU meters (0..1 normalized)
-    const [vuLevels, setVuLevels] = useState<Record<string, number>>({ track_1: 0, track_2: 0 });
+    const [vuLevels, setVuLevels] = useState<Record<string, number>>({ track_1: 0, track_2: 0, mic: 0 });
     const [masterVu, setMasterVu] = useState<number>(0);
+
+    // Keep latest decks in a ref for event handlers
+    useEffect(() => { decksRef.current = decks; }, [decks]);
 
     // Tempo and BPM states
     useEffect(() => {
         const t1 = new Audio("/nui/audio/track_1.mp3");
         const t2 = new Audio("/nui/audio/track_2.mp3");
-        t1.loop = true;
-        t2.loop = true;
+        t1.loop = false;
+        t2.loop = false;
         t1.preload = "auto";
         t2.preload = "auto";
         // Ensure tempo affects pitch (disable pitch preservation where supported)
@@ -178,6 +181,10 @@ export default function MusicController() {
         t2.addEventListener("loadedmetadata", onLoaded2);
         t1.addEventListener("timeupdate", onTime1);
         t2.addEventListener("timeupdate", onTime2);
+        const onEnded1 = () => { try { advancePlaylist("track_1"); } catch {} };
+        const onEnded2 = () => { try { advancePlaylist("track_2"); } catch {} };
+        t1.addEventListener("ended", onEnded1);
+        t2.addEventListener("ended", onEnded2);
 
         let cancelled = false;
         (async () => {
@@ -195,6 +202,8 @@ export default function MusicController() {
             t2.removeEventListener("loadedmetadata", onLoaded2);
             t1.removeEventListener("timeupdate", onTime1);
             t2.removeEventListener("timeupdate", onTime2);
+            t1.removeEventListener("ended", onEnded1);
+            t2.removeEventListener("ended", onEnded2);
             t1.pause();
             t2.pause();
             try {
@@ -324,10 +333,12 @@ export default function MusicController() {
                 // disconnect and stop
                 try { micSourceRef.current?.disconnect(); } catch {}
                 try { micGainRef.current?.disconnect(); } catch {}
+				try { micAnalyserRef.current?.disconnect(); } catch {}
                 try { micStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch {} }); } catch {}
                 micSourceRef.current = null;
                 micGainRef.current = null;
                 micStreamRef.current = null;
+				micAnalyserRef.current = null;
                 setIsMicOn(false);
             }
         } catch {}
@@ -430,24 +441,7 @@ export default function MusicController() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isBroadcasting]);
 
-    // Load YouTube IFrame API once
-    useEffect(() => {
-        if ((window as any).YT && (window as any).YT.Player) {
-            ytReadyRef.current = true;
-            return;
-        }
-        const tag = document.createElement("script");
-        tag.src = "https://www.youtube.com/iframe_api";
-        const firstScriptTag = document.getElementsByTagName("script")[0];
-        if (firstScriptTag && firstScriptTag.parentNode) {
-            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-        } else {
-            document.body.appendChild(tag);
-        }
-        (window as any).onYouTubeIframeAPIReady = () => {
-            ytReadyRef.current = true;
-        };
-    }, []);
+    // (YouTube IFrame API removed)
 
     // Apply equal-power crossfade to gain nodes; also apply playbackRate
     useEffect(() => {
@@ -491,56 +485,9 @@ export default function MusicController() {
         other.panner.pan.value = isFirst ? 1 : -1;
     }, [monitorDeck]);
 
-    // Apply volume to YouTube players to approximate crossfade/mix
-    useEffect(() => {
-        const applyVol = (deck: "track_1" | "track_2") => {
-            const player = ytPlayersRef.current[deck];
-            if (!player || typeof player.setVolume !== "function") return;
-            const vol = decks[deck]?.deckVolume ?? 1;
-            let out = 0;
-            if (monitorDeck) {
-                out = Math.max(0, Math.min(1, 0.5 * masterVolume * vol));
-            } else {
-                const theta = crossfade * 0.5 * Math.PI;
-                const leftGain = Math.cos(theta);
-                const rightGain = Math.sin(theta);
-                const gain = deck === "track_1" ? leftGain : rightGain;
-                out = Math.max(0, Math.min(1, gain * masterVolume * vol));
-            }
-            player.setVolume(Math.round(out * 100));
-        };
-        if (decks.track_1) applyVol("track_1");
-        if (decks.track_2) applyVol("track_2");
-    }, [decks, crossfade, masterVolume, monitorDeck]);
+    // (YouTube volume mapping removed)
 
-    // Map deck tempo to nearest YouTube playback rate when a YouTube item is active
-    useEffect(() => {
-        const applyRate = (deck: "track_1" | "track_2") => {
-            const d = decks[deck];
-            if (!d) return;
-            const currentItem = d.playlist?.find(x => x.id === d.currentItemId);
-            if (currentItem?.sourceType !== "youtube") return;
-            const player = ytPlayersRef.current[deck];
-            if (!player || typeof player.setPlaybackRate !== "function") return;
-            let rates: number[] = [];
-            try {
-                rates = player.getAvailablePlaybackRates?.() || [];
-            } catch {
-                rates = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
-            }
-            if (!rates || rates.length === 0) rates = [0.25, 0.5, 1, 1.5, 2];
-            const desired = d.tempo; // 0.5..1.5
-            let closest = rates[0];
-            let diff = Math.abs(closest - desired);
-            for (const r of rates) {
-                const nd = Math.abs(r - desired);
-                if (nd < diff) { closest = r; diff = nd; }
-            }
-            try { player.setPlaybackRate(closest); } catch {}
-        };
-        applyRate("track_1");
-        applyRate("track_2");
-    }, [decks.track_1?.tempo, decks.track_2?.tempo, decks.track_1?.currentItemId, decks.track_2?.currentItemId]);
+    // (YouTube playback rate mapping removed)
 
     // --- BPM Analysis Utilities ---
     async function analyzeBpmForUrl(url: string): Promise<number | null> {
@@ -585,51 +532,27 @@ export default function MusicController() {
         }
     };
 
-    const parseYouTubeId = (url: string): string | null => {
-        try {
-            const u = new URL(url);
-            if (u.hostname.includes("youtube.com")) {
-                if (u.pathname === "/watch") {
-                    return u.searchParams.get("v");
-                }
-                const parts = u.pathname.split("/").filter(Boolean);
-                // /shorts/VIDEOID or /embed/VIDEOID
-                if (parts[0] === "shorts" || parts[0] === "embed" || parts[0] === "live") {
-                    return parts[1] || null;
-                }
-            }
-            if (u.hostname.includes("youtu.be")) {
-                const parts = u.pathname.split("/").filter(Boolean);
-                return parts[0] || null;
-            }
-        } catch {}
-        return null;
+    const getNextPlaylistItemId = (deck: "track_1" | "track_2"): string | null => {
+        const d = decksRef.current[deck];
+        const list = d?.playlist || [];
+        if (list.length === 0) return null;
+        const currId = d?.currentItemId;
+        const idx = list.findIndex(it => it.id === currId);
+        const nextIdx = idx >= 0 ? (idx + 1) % list.length : 0;
+        const nextItem = list[nextIdx];
+        return nextItem ? nextItem.id : null;
     };
 
-	const fetchYoutubeTitle = async (videoId: string): Promise<string | null> => {
-		try {
-			const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
-			const res = await fetch(url);
-			if (!res.ok) return null;
-			const data = await res.json();
-			const t = (data && typeof data.title === "string") ? (data.title as string) : null;
-			return t ?? null;
-		} catch {
-			return null;
-		}
-	};
+    const advancePlaylist = async (deck: "track_1" | "track_2") => {
+        const nextId = getNextPlaylistItemId(deck);
+        if (!nextId) return;
+        await loadPlaylistItem(deck, nextId);
+    };
+
+    // (YouTube helpers removed)
 
     const addUrlToPlaylist = async (deck: string, url: string) => {
-        const ytId = parseYouTubeId(url);
-		const ytTitle = ytId ? await fetchYoutubeTitle(ytId) : null;
-		const item: PlaylistItem = ytId ? {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-			title: ytTitle ?? deriveTitleFromUrlOrName(url),
-            src: url,
-            sourceType: "youtube",
-            baseBpm: null,
-            youtubeId: ytId,
-        } : {
+        const item: PlaylistItem = {
             id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
             title: deriveTitleFromUrlOrName(url),
             src: url,
@@ -641,9 +564,7 @@ export default function MusicController() {
             return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
         });
         let bpm: number | null = null;
-        if (item.sourceType !== "youtube") {
-            bpm = await analyzeBpmForUrl(url);
-        }
+        bpm = await analyzeBpmForUrl(url);
         if (bpm) {
             setDecks(prev => {
                 const list = prev[deck]?.playlist || [];
@@ -683,204 +604,117 @@ export default function MusicController() {
     };
 
     const loadPlaylistItem = async (deck: string, itemId: string) => {
-        const d = decks[deck];
-        if (!d?.audio) return;
-        const item = d.playlist?.find(x => x.id === itemId);
-        if (!item) return;
-        const wasPlaying = d.isPlaying;
-        // Stop any active YouTube timer for this deck
-        if (ytTimersRef.current[deck]) {
-            window.clearInterval(ytTimersRef.current[deck] as number);
-            ytTimersRef.current[deck] = null;
-        }
-        // If switching away from YouTube, stop playback
-        const existingPlayer = ytPlayersRef.current[deck];
-        if (existingPlayer && (decks[deck].currentItemId && item.sourceType !== "youtube")) {
-            try { existingPlayer.stopVideo?.(); } catch {}
-        }
-        if (d.objectUrl && d.objectUrl !== item.src) {
-            try { URL.revokeObjectURL(d.objectUrl); } catch {}
-        }
-        if (item.sourceType === "youtube" && item.youtubeId) {
-            // Prepare YT playback
-            setDecks(prev => ({
-                ...prev,
-                [deck]: {
-                    ...prev[deck],
-                    baseBpm: item.baseBpm ?? null,
-                    currentTime: 0,
-                    duration: 0,
-                    isPlaying: false,
-                    objectUrl: undefined,
-                    currentItemId: item.id,
-                }
-            }));
-            const ensureReady = () => new Promise<void>((resolve) => {
-                if (ytReadyRef.current && (window as any).YT?.Player) return resolve();
-                const iv = window.setInterval(() => {
-                    if (ytReadyRef.current && (window as any).YT?.Player) {
-                        window.clearInterval(iv);
-                        resolve();
-                    }
-                }, 50);
-            });
-            await ensureReady();
-            let player = ytPlayersRef.current[deck];
-            const containerId = `yt-${deck}`;
-            const setupTimer = () => {
-                if (ytTimersRef.current[deck]) window.clearInterval(ytTimersRef.current[deck] as number);
-                ytTimersRef.current[deck] = window.setInterval(() => {
-                    try {
-                        const p = ytPlayersRef.current[deck];
-                        const ct = p?.getCurrentTime?.() ?? 0;
-                        const dur = p?.getDuration?.() ?? 0;
-                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: ct, duration: dur } }));
-                    } catch {}
-                }, 250) as unknown as number;
-            };
-            const onReady = () => {
-                try {
-                    const p = ytPlayersRef.current[deck];
-                    const dur = p?.getDuration?.() ?? 0;
-                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], duration: dur } }));
-                    setupTimer();
-                    if (wasPlaying) {
-                        try { p?.playVideo?.(); } catch {}
-                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
-                    }
-                } catch {}
-            };
-            const onStateChange = (e: any) => {
-                const YT = (window as any).YT;
-                if (!YT) return;
-				// keep slider synced on any state change
-				try {
-                    const p = ytPlayersRef.current[deck];
-					const ct = p?.getCurrentTime?.() ?? 0;
-					const dur = p?.getDuration?.() ?? 0;
-					setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: ct, duration: dur } }));
-				} catch {}
-				setupTimer();
-                if (e.data === YT.PlayerState.PLAYING) {
-                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
-                } else if (e.data === YT.PlayerState.PAUSED) {
-                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
-                } else if (e.data === YT.PlayerState.ENDED) {
-                    // loop
-                    try { ytPlayersRef.current[deck]?.seekTo?.(0, true); ytPlayersRef.current[deck]?.playVideo?.(); } catch {}
-                }
-            };
-            if (player) {
-                try {
-                    player.loadVideoById({ videoId: item.youtubeId, startSeconds: 0, suggestedQuality: "large" });
-					// Try to sync immediately and start timer
-					try {
-                        const p = ytPlayersRef.current[deck];
-						const dur = p?.getDuration?.() ?? 0;
-						const ct = p?.getCurrentTime?.() ?? 0;
-						setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: ct, duration: dur } }));
-					} catch {}
-					setupTimer();
-                } catch {
-                    try { player.destroy?.(); } catch {}
-                    ytPlayersRef.current[deck] = null;
-                    player = null;
-                }
-            }
-            if (!player) {
-                ytPlayersRef.current[deck] = new (window as any).YT.Player(containerId, {
-                    videoId: item.youtubeId,
-                    playerVars: {
-                        autoplay: 0,
-                        controls: 0,
-                        rel: 0,
-                        modestbranding: 1,
-                        playsinline: 1,
-                    },
-                    events: {
-                        onReady: onReady,
-                        onStateChange: onStateChange,
-                    }
-                });
-                // Ensure local `player` reference mirrors ref for subsequent logic
-                player = ytPlayersRef.current[deck];
-            }
-        } else {
-            // Regular audio path
-            d.audio.pause();
-            d.audio.src = item.src;
-            d.audio.currentTime = 0;
-            d.audio.loop = true;
-            d.audio.preload = "auto";
-            try {
-                (d.audio as any).preservesPitch = false;
-                (d.audio as any).mozPreservesPitch = false;
-                (d.audio as any).webkitPreservesPitch = false;
-            } catch {}
-            d.audio.load();
-            setDecks(prev => ({
-                ...prev,
-                [deck]: {
-                    ...prev[deck],
-                    baseBpm: item.baseBpm ?? null,
-                    currentTime: 0,
-                    duration: 0,
-                    isPlaying: false,
-                    objectUrl: item.sourceType === "file" ? item.src : undefined,
-                    currentItemId: item.id,
-                }
-            }));
-            const resumeIfNeeded = async () => {
-                if (wasPlaying) {
-                    try { await audioCtxRef.current?.resume?.(); } catch {}
-                    try {
-                        await d.audio.play();
-                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
-                    } catch {}
-                }
-            };
-            d.audio.addEventListener("canplay", resumeIfNeeded, { once: true });
-		if (item.baseBpm == null) {
-			let bpm: number | null = null;
-			if (item.sourceType === "url") {
-				bpm = await analyzeBpmForUrl(item.src);
-			} else if (item.sourceType === "file") {
-				bpm = await (async () => {
-					try { const res = await fetch(item.src); const b = await res.blob(); return await analyzeBpmFromBlob(b); } catch { return null; }
-				})();
-			} else if (item.sourceType === "youtube") {
-				// Skip BPM analysis for YouTube
-				bpm = null;
-			}
-			if (bpm) {
-				setDecks(prev => {
-					const list = prev[deck]?.playlist || [];
-					const idx = list.findIndex(it => it.id === itemId);
-					const nextList = [...list];
-					if (idx !== -1) nextList[idx] = { ...nextList[idx], baseBpm: bpm };
-					const isCurrent = prev[deck]?.currentItemId === itemId;
-					return {
-						...prev,
-						[deck]: { ...prev[deck], playlist: nextList, baseBpm: isCurrent ? bpm : prev[deck].baseBpm }
-					};
-				});
-			}
-		}
-        }
+    	const d = decksRef.current[deck];
+    	if (!d?.audio) return;
+    	const item = (d.playlist || []).find(x => x.id === itemId);
+    	if (!item) return;
+    	const wasPlaying = d.isPlaying === true;
+    	// Configure audio element
+    	try { d.audio.pause(); } catch {}
+    	try {
+    		d.audio.src = item.src;
+    		d.audio.currentTime = 0;
+    		d.audio.loop = false;
+    		d.audio.preload = "auto";
+    	} catch {}
+    	try {
+    		(d.audio as any).preservesPitch = false;
+    		(d.audio as any).mozPreservesPitch = false;
+    		(d.audio as any).webkitPreservesPitch = false;
+    	} catch {}
+    	try { d.audio.load(); } catch {}
+    	// Commit selection state
+    	setDecks(prev => {
+    		const prevDeck = prev[deck];
+    		if (!prevDeck) return prev;
+    		return {
+    			...prev,
+    			[deck]: {
+    				...prevDeck,
+    				baseBpm: item.baseBpm ?? null,
+    				currentTime: 0,
+    				duration: 0,
+    				isPlaying: false,
+    				objectUrl: item.sourceType === "file" ? item.src : undefined,
+    				currentItemId: item.id,
+    			}
+    		};
+    	});
+    	// Autoplay only if previously playing; guard current item
+    	const resumeIfNeeded = async () => {
+    		const latest = decksRef.current[deck];
+    		if (!latest || latest.currentItemId !== itemId) return;
+    		if (!wasPlaying) return;
+    		try { await audioCtxRef.current?.resume?.(); } catch {}
+    		try {
+    			await latest.audio.play();
+    			setDecks(prev => {
+    				const pd = prev[deck];
+    				if (!pd || pd.currentItemId !== itemId) return prev;
+    				return { ...prev, [deck]: { ...pd, isPlaying: true } };
+    			});
+    		} catch {}
+    	};
+    	try { d.audio.addEventListener("canplay", resumeIfNeeded, { once: true } as any); } catch {}
+    	// BPM analysis if missing
+    	if (item.baseBpm == null) {
+    		let bpm: number | null = null;
+    		if (item.sourceType === "url") {
+    			bpm = await analyzeBpmForUrl(item.src);
+    		} else if (item.sourceType === "file") {
+    			bpm = await (async () => {
+    				try { const res = await fetch(item.src); const b = await res.blob(); return await analyzeBpmFromBlob(b); } catch { return null; }
+    			})();
+    		}
+    		if (bpm) {
+    			setDecks(prev => {
+    				const list = prev[deck]?.playlist || [];
+    				const idx = list.findIndex(it => it.id === itemId);
+    				const nextList = [...list];
+    				if (idx !== -1) nextList[idx] = { ...nextList[idx], baseBpm: bpm };
+    				const isCurrent = prev[deck]?.currentItemId === itemId;
+    				return {
+    					...prev,
+    					[deck]: { ...prev[deck], playlist: nextList, baseBpm: isCurrent ? bpm : prev[deck].baseBpm }
+    				};
+    			});
+    		}
+    	}
     };
 
     const removePlaylistItem = (deck: string, itemId: string) => {
         const d = decks[deck];
         if (!d) return;
         const item = d.playlist?.find(x => x.id === itemId);
-        if (item?.sourceType === "file" && item.src !== d.audio.src) {
-            try { URL.revokeObjectURL(item.src); } catch {}
+        const wasCurrent = d.currentItemId === itemId;
+
+        if (item) {
+            // Revoke object URLs where appropriate
+            if (item.sourceType === "file") {
+                if (wasCurrent) {
+                    try { if (d.objectUrl) URL.revokeObjectURL(d.objectUrl); } catch {}
+                } else if (item.src !== d.audio.src) {
+                    try { URL.revokeObjectURL(item.src); } catch {}
+                }
+            }
+            // If removing the currently loaded item, stop playback and clear sources
+            if (wasCurrent) {
+                try { d.audio.pause(); } catch {}
+                try { d.audio.src = ""; } catch {}
+                try { d.audio.removeAttribute("src"); } catch {}
+                try { d.audio.currentTime = 0; d.audio.load(); } catch {}
+            }
         }
+
         setDecks(prev => {
             const list = prev[deck]?.playlist || [];
             const next = list.filter(it => it.id !== itemId);
-            const wasCurrent = prev[deck]?.currentItemId === itemId;
-            return { ...prev, [deck]: { ...prev[deck], playlist: next, currentItemId: wasCurrent ? null : prev[deck].currentItemId } };
+            const wasCurrentPrev = prev[deck]?.currentItemId === itemId;
+            if (!prev[deck]) return prev;
+            const nextDeck = wasCurrentPrev
+                ? { ...prev[deck], playlist: next, currentItemId: null, isPlaying: false, currentTime: 0, duration: 0, objectUrl: undefined }
+                : { ...prev[deck], playlist: next };
+            return { ...prev, [deck]: nextDeck };
         });
     };
 
@@ -969,18 +803,15 @@ export default function MusicController() {
         const d = decks[deck];
         if (!d?.audio) return;
         const currentItem = d.playlist?.find(x => x.id === d.currentItemId);
-        if (currentItem?.sourceType === "youtube") {
-            const player = ytPlayersRef.current[deck];
-            if (!player) return;
-            if (d.isPlaying) {
-                try { player.pauseVideo?.(); } catch {}
-                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
-            } else {
-                try { player.playVideo?.(); } catch {}
-                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
-            }
+
+        // If no current item (e.g., it was deleted), allow stopping any lingering playback
+        if (!currentItem) {
+            try { d.audio.pause(); } catch {}
+            setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
             return;
         }
+
+        // (YouTube player handling removed)
         const ctx = audioCtxRef.current;
         if (d.isPlaying) {
             d.audio.pause();
@@ -1005,36 +836,56 @@ export default function MusicController() {
         return `${m}:${r.toString().padStart(2, "0")}`;
     };
 
-    // Simple segmented digital VU meter (bottom-up 12 segments)
-    function VuMeter({ level, height = 80 }: { level: number; height?: number }) {
-        const segments = 12;
-        const lit = Math.max(0, Math.min(segments, Math.round(level * segments)));
-        const segs = [];
-        for (let i = 0; i < segments; i++) {
-            const idxFromBottom = i + 1;
-            const on = idxFromBottom <= lit;
-            let color = "#18a058"; // green
-            const frac = idxFromBottom / segments;
-            if (frac >= 0.85) color = "#d64545"; // red
-            else if (frac >= 0.65) color = "#c8a43b"; // amber
-            segs.push(
-                <div
-                    key={i}
-                    className="vuSeg"
-                    style={{ background: on ? color : undefined }}
-                />
-            );
-        }
-        return (
-            <div className="vu" style={{ height }}>
-                {segs}
-            </div>
-        );
-    }
+    // (VU Meter moved into RangeControl component)
 
     useNuiEvent("music:setControllerVisible", (data: any) => {
         setVisible(data.visible);
     });
+
+    // Horizontal VU meter (mic-only) using same segment style as vertical
+    function HorizontalVu({ level }: { level: number }) {
+        const segments = 12;
+        const lit = Math.max(0, Math.min(segments, Math.round(level * segments)));
+        const segs: JSX.Element[] = [];
+        for (let i = 0; i < segments; i++) {
+            const idxFromLeft = i + 1;
+            const on = idxFromLeft <= lit;
+            let color = "#18a058";
+            const frac = idxFromLeft / segments;
+            if (frac >= 0.85) color = "#d64545";
+            else if (frac >= 0.65) color = "#c8a43b";
+            segs.push(
+                <div
+                    key={i}
+                    style={{
+                        flex: 1,
+                        minWidth: 4,
+                        height: 6,
+                        borderRadius: 1,
+                        background: on ? color : "#1e1e1e",
+                    }}
+                />
+            );
+        }
+        return (
+            <div
+                style={{
+                    width: "100%",
+                    height: 10,
+                    background: "#0b0b0b",
+                    border: "1px solid #333",
+                    borderRadius: 3,
+                    display: "flex",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    padding: 1,
+                    gap: 1,
+                }}
+            >
+                {segs}
+            </div>
+        );
+    }
 
     // Mic toggle handlers
     const enableMic = async () => {
@@ -1054,6 +905,14 @@ export default function MusicController() {
             gain.gain.value = 1.0;
             source.connect(gain);
             gain.connect(bus);
+			// Tap mic signal for VU meter
+			try {
+				const analyser = ctx.createAnalyser();
+				analyser.smoothingTimeConstant = 0.8;
+				analyser.fftSize = 1024;
+				gain.connect(analyser);
+				micAnalyserRef.current = analyser;
+			} catch {}
             micStreamRef.current = stream;
             micSourceRef.current = source;
             micGainRef.current = gain;
@@ -1068,10 +927,12 @@ export default function MusicController() {
         if (!isMicOn) return;
         try { micSourceRef.current?.disconnect(); } catch {}
         try { micGainRef.current?.disconnect(); } catch {}
+		try { micAnalyserRef.current?.disconnect(); } catch {}
         try { micStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch {} }); } catch {}
         micSourceRef.current = null;
         micGainRef.current = null;
         micStreamRef.current = null;
+		micAnalyserRef.current = null;
         setIsMicOn(false);
     };
     const toggleMic = async () => {
@@ -1144,12 +1005,14 @@ export default function MusicController() {
             const a1 = nodesRef.current["track_1"]?.analyser;
             const a2 = nodesRef.current["track_2"]?.analyser;
             const am = masterAnalyserRef.current;
-            const l1 = computeLevel(a1);
-            const l2 = computeLevel(a2);
-            const lm = computeLevel(am);
+			const ami = micAnalyserRef.current;
+			const l1 = computeLevel(a1);
+			const l2 = computeLevel(a2);
+			const lm = computeLevel(am);
+			const lmi = computeLevel(ami);
             setVuLevels(prev => {
-                const n = { ...prev, track_1: l1, track_2: l2 };
-                return (prev.track_1 !== n.track_1 || prev.track_2 !== n.track_2) ? n : prev;
+				const n = { ...prev, track_1: l1, track_2: l2, mic: lmi };
+				return (prev.track_1 !== n.track_1 || prev.track_2 !== n.track_2 || prev.mic !== n.mic) ? n : prev;
             });
             setMasterVu(prev => (Math.abs(prev - lm) > 0.01 ? lm : prev));
             raf = requestAnimationFrame(tick);
@@ -1159,7 +1022,7 @@ export default function MusicController() {
     }, []);
 
     return (decks.track_1 && decks.track_2 && visible) ? (
-        <div className="bg-background" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="bg-background p-4 rounded-md absolute bottom-[20px] left-[50%] translate-x-[-50%]" style={{ display: "flex", flexDirection: "column", width: "1280px" }}>
             {/* Local styles for vinyl visuals and controls */}
             <style>
                 {`
@@ -1264,8 +1127,13 @@ export default function MusicController() {
                     align-items: center;
                 }
                 .resetBtn {
-                    margin-left: 8px;
-                    padding: 2px 6px;
+                    width: 30px;
+                    height: 30px;
+                    min-width: 30px;
+                    min-height: 30px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
                     border: 1px solid #555;
                     border-radius: 4px;
                     background: #1e1e1e;
@@ -1294,11 +1162,11 @@ export default function MusicController() {
                     align-items: flex-start;
                 }
                 .playlistCol {
-                    width: 300px;
-                    max-width: 320px;
+                    width: 232px;
                     display: flex;
                     flex-direction: column;
                     gap: 8px;
+                    overflow-y: scroll;
                 }
                 .controlsCol {
                     flex: 1;
@@ -1309,11 +1177,12 @@ export default function MusicController() {
                 }
                 /* Vertical slider helpers */
                 .vGroup {
+                    width: 37px;
+                    height: 100%;
                     display: flex;
                     flex-direction: column;
                     align-items: center;
                     gap: 6px;
-                    height: 220px;
                 }
                 .vRange {
                     -webkit-appearance: slider-vertical; /* Chrome/Edge/Safari */
@@ -1323,8 +1192,6 @@ export default function MusicController() {
                     height: 12px; /* fill the group */
                     transform: rotate(90deg);
                     flex: 1; /* take remaining vertical space between label and bottom info */
-                }
-                .vRange.vOpposite {
                     transform: rotate(-90deg);
                 }
                 /* Custom range styling with image thumb */
@@ -1460,7 +1327,7 @@ export default function MusicController() {
                 /* Digital VU meter */
                 .vu {
                     width: 10px;
-                    height: 80px;
+                    height: 100%;
                     background: #0b0b0b;
                     border: 1px solid #333;
                     border-radius: 3px;
@@ -1481,101 +1348,82 @@ export default function MusicController() {
                 {Object.keys({track_1: decks.track_1, controls: decks.controls, track_2: decks.track_2}).map(function(deck) {
                     if (deck === "controls") {
                         return (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
-                            <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
-                                <div className="vGroup">
-                                    <span>Left</span>
-                                    <input
-                                        className="range vRange"
-                                        type="range"
-                                        min={0}
-                                        max={100}
-                                        step={1}
-                                        value={Math.round(crossfade * 100)}
-                                        onChange={(e) => setCrossfade(Number(e.target.value) / 100)}
-                                        aria-label="Crossfader"
-                                    />
-                                    <span>Right</span>
-                                    <button
-                                        className="resetBtn"
-                                        onClick={() => setCrossfade(0.5)}
-                                        aria-label="Reset crossfader"
-                                        title="Reset crossfader"
-                                    >
-                                        ↺
-                                    </button>
-                                </div>
-                                <div className="vGroup">
-                                    <span>Master</span>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                        <input
-                                            className="range vRange vOpposite"
-                                            type="range"
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", justifyContent: "center"  }}>
+                                <div className="mixerRow h-[220px]" style={{ gap: 24, justifyContent: "center" }}>
+                                    <div className="vGroup">
+                                        <RangeControl
+                                            orientation="vertical"
+                                            label="Right"
+                                            valueText={"Left"}
+                                            min={0}
+                                            max={100}
+                                            step={1}
+                                            value={Math.round(crossfade * 100)}
+                                            onChange={(v) => setCrossfade(v / 100)}
+                                            ariaLabel="Crossfader"
+                                        />
+                                        <button
+                                            className="resetBtn"
+                                            onClick={() => setCrossfade(0.5)}
+                                            aria-label="Reset crossfader"
+                                            title="Reset crossfader"
+                                        >
+                                            ↺
+                                        </button>
+                                    </div>
+                                    <div className="vGroup">
+                                        <RangeControl
+                                            orientation="vertical"
                                             min={0}
                                             max={100}
                                             step={1}
                                             value={Math.round(masterVolume * 100)}
-                                            onChange={(e) => setMasterVolume(Number(e.target.value) / 100)}
-                                            aria-label="Master volume"
+                                            onChange={(v) => setMasterVolume(v / 100)}
+                                            ariaLabel="Master volume"
+                                            showVu={true}
+                                            vuLevel={masterVu}
+                                            label="Master"
+                                            valueText={`${Math.round(masterVolume * 100)}%`}
                                         />
-                                        <VuMeter level={masterVu} />
+                                        <button
+                                            className="resetBtn"
+                                            onClick={() => setMasterVolume(1)}
+                                            aria-label="Reset master volume"
+                                            title="Reset master volume"
+                                        >
+                                            ↺
+                                        </button>
                                     </div>
-                                    <span>{Math.round(masterVolume * 100)}%</span>
-                                    <button
-                                        className="resetBtn"
-                                        onClick={() => setMasterVolume(0.6)}
-                                        aria-label="Reset master volume"
-                                        title="Reset master volume"
-                                    >
-                                        ↺
-                                    </button>
                                 </div>
-                            </div>
-                            <div className="mixerRow" style={{ gap: 12, justifyContent: "center" }}>
-                                <button
-                                    className="resetBtn"
-                                    onClick={() => { setIsAddDialogOpen(true); }}
-                                    aria-label="Add Song to Playlist"
-                                    title="Add Song to Playlist"
-                                >
-                                    Add Song to Playlist
-                                </button>
-                            </div>
-                            <div className="mixerRow" style={{ gap: 12, justifyContent: "center" }}>
-                                {!isBroadcasting ? (
+                                <div className="mixerRow w-full" style={{ gap: 12, justifyContent: "center" }}>
                                     <button
-                                        className="resetBtn"
+                                        className="bg-secondary px-4 w-full py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80"
                                         onClick={startBroadcast}
                                         aria-label="Start broadcasting mix to clients"
                                         title="Start broadcasting mix to clients"
                                     >
-                                        Start Broadcast
+                                        {isBroadcasting ? "Stop Broadcasting" : "Start Broadcasting"}
                                     </button>
-                                ) : (
+                                </div>
+                                 <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                                    <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6, width: "100%" }}>
                                     <button
                                         className="resetBtn"
-                                        onClick={stopBroadcast}
-                                        aria-label="Stop broadcasting"
-                                        title="Stop broadcasting"
+                                        onClick={toggleMic}
+                                        aria-label={isMicOn ? "Turn off mic" : "Turn on mic"}
+                                        title={isMicOn ? "Turn off mic" : "Turn on mic"}
                                     >
-                                        Stop Broadcast
+                                        {isMicOn ? 
+                                            <Mic className="w-4 h-4 text-green-500" />
+                                        :
+                                            <MicOff className="w-4 h-4 text-red-500" />
+                                        }
                                     </button>
-                                )}
-                                <button
-                                    className="resetBtn"
-                                    onClick={toggleMic}
-                                    aria-label={isMicOn ? "Turn off mic" : "Turn on mic"}
-                                    title={isMicOn ? "Turn off mic" : "Turn on mic"}
-                                >
-                                    {isMicOn ? "Mic Off" : "Mic On"}
-                                </button>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                    <label htmlFor="micDevice" style={{ opacity: 0.85 }}>Mic</label>
-                                    <select
+                                        <select
                                         id="micDevice"
                                         value={selectedMicId ?? ""}
                                         onChange={(e) => setSelectedMicId(e.target.value || null)}
-                                        style={{ background: "#0f0f0f", color: "#eee", border: "1px solid #333", borderRadius: 6, padding: "4px 6px" }}
+                                        style={{ width: "100%", background: "#0f0f0f", color: "#eee", border: "1px solid #333", borderRadius: 6, padding: "4px 6px" }}
                                     >
                                         {micDevices.length === 0 ? (
                                             <option value="">No inputs</option>
@@ -1587,50 +1435,50 @@ export default function MusicController() {
                                             ))
                                         )}
                                     </select>
+                                    </div>
+                                    <HorizontalVu level={vuLevels.mic} />
                                 </div>
                             </div>
-                            <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
-                                {Object.keys(decks).map(function(deck) {
-                                    return (
-                                        <div className="playlistCol">
-                                            <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", alignItems: "stretch" }}>
-                                                {(decks[deck].playlist ?? []).map(item => (
-                                                    <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%" }}>
-                                                        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                                                            <div style={{ width: 6, height: 6, borderRadius: 999, background: decks[deck].currentItemId === item.id ? "#60d394" : "#555" }} />
-                                                            <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>{item.title}</div>
-															{typeof item.baseBpm === "number" ? (
-                                                                <span style={{ opacity: 0.7, fontSize: 12 }}>• {item.baseBpm.toFixed(0)} BPM</span>
-															) : item.sourceType === "youtube" ? null : (
-                                                                <span style={{ opacity: 0.5, fontSize: 12 }}>• analyzing…</span>
-                                                            )}
-                                                        </div>
-                                                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                                            <button
-                                                                className="resetBtn"
-                                                                onClick={() => loadPlaylistItem(deck, item.id)}
-                                                                title="Load"
-                                                            >
-                                                                Load
-                                                            </button>
-                                                            <button
-                                                                className="resetBtn"
-                                                                onClick={() => removePlaylistItem(deck, item.id)}
-                                                                title="Remove"
-                                                            >
-                                                                ✕
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
                         )
                     } else {
+                        const playlistCol = (
+                            <div className="playlistCol bg-secondary h-full">
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", alignItems: "stretch" }}>
+                                    <div
+                                        className="cursor-pointer hover:bg-primary/10 transition-colors duration-200 px-4"
+                                        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%", paddingTop: 8, paddingBottom: 8, borderBottom: "1px solid #222" }}
+                                        onClick={(e) => { e.stopPropagation(); setAddDialogDeck(deck as "track_1" | "track_2"); setIsAddDialogOpen(true); }}
+                                    >
+                                        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                                            <div className="text-sm" style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>
+                                                <Plus className="w-4 h-4" />
+                                                Add Song to Playlist
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {(decks[deck].playlist ?? []).map(item => (
+                                        <div className="cursor-pointer hover:bg-primary/10 transition-colors duration-200 px-4" key={item.id} onClick={() => loadPlaylistItem(deck, item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%" }}>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                                                <div style={{ minWidth: 6, width: 6, minHeight: 6, height: 6, borderRadius: 999, background: decks[deck].currentItemId === item.id ? "#60d394" : "#555" }} />
+                                                <div className="text-xs" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>{item.title}</div>
+                                                {typeof item.baseBpm === "number" ? (
+                                                    <span style={{ opacity: 0.7, fontSize: 12, whiteSpace: "nowrap" }}>• {item.baseBpm.toFixed(0)} BPM</span>
+                                                ) : (null)}
+                                            </div>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                                <button
+                                                    className="text-xs hover:text-red-500"
+                                                    onClick={(e) => { e.stopPropagation(); removePlaylistItem(deck, item.id); }}
+                                                    title="Remove"
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        );
                         return (
                             <div className="deck" key={deck}>
                                 <div className="deckRow">
@@ -1670,54 +1518,37 @@ export default function MusicController() {
                                         </div>
                                         <div className="controls" style={{ width: "100%", justifyContent: "center" }}>
                                             <span>{formatTime(decks[deck].currentTime)}</span>
-                                            <input
-                                                className="range"
-                                                type="range"
+                                            <RangeControl
                                                 min={0}
                                                 max={Math.max(0, decks[deck].duration || 0)}
                                                 step={0.01}
                                                 value={Math.min(decks[deck].currentTime || 0, decks[deck].duration || 0)}
-                                                onChange={(e) => {
-                                                    const to = Number(e.target.value);
-                                                    const currentItem = decks[deck].playlist?.find(x => x.id === decks[deck].currentItemId);
-                                                    if (currentItem?.sourceType === "youtube") {
-                                                        const player = ytPlayersRef.current[deck];
-                                                        try { player?.seekTo?.(to, true); } catch {}
-                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
-                                                    } else {
-                                                        decks[deck].audio.currentTime = to;
-                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
-                                                    }
+                                                onChange={(to) => {
+                                                    decks[deck].audio.currentTime = to;
+                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
                                                 }}
-                                                aria-label={`${deck} position`}
+                                                ariaLabel={`${deck} position`}
                                                 disabled={!decks[deck].duration || decks[deck].duration === 0}
                                             />
                                             <span>{formatTime(decks[deck].duration)}</span>
                                         </div>
-                                        {/* Hidden YouTube container (background playback) */}
-                                        <div style={{ position: "fixed", width: 1, height: 1, opacity: 0, pointerEvents: "none", left: -9999, top: -9999, overflow: "hidden" }}>
-                                            <div id={`yt-${deck}`} style={{ width: 1, height: 1 }} />
-                                        </div>
-                                        <div className="controls" style={{ width: "100%", justifyContent: "center", gap: 24 }}>
+                                        {/* (YouTube container removed) */}
+                                        <div className="controls h-[220px]" style={{ width: "100%", justifyContent: "center", gap: 24 }}>
+                                            {deck === "track_2" && playlistCol}
                                             <div className="vGroup">
-                                                <span>Tempo</span>
-                                                <input
-                                                    className="range vRange"
-                                                    type="range"
+                                                <RangeControl
+                                                    orientation="vertical"
                                                     min={50}
                                                     max={150}
                                                     step={1}
                                                     value={Math.round(decks[deck].tempo * 100)}
-                                                    onChange={(e) => { 
-                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: Number(e.target.value) / 100 } }));
+                                                    onChange={(v) => {
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: v / 100 } }));
                                                     }}
-                                                    aria-label={`${deck} tempo`}
+                                                    ariaLabel={`${deck} tempo`}
+													label="Tempo"
+													valueText={decks[deck].baseBpm ? `${Math.round(decks[deck].baseBpm * decks[deck].tempo)} BPM` : "—"}
                                                 />
-                                                <span>
-                                                    {decks[deck].baseBpm
-                                                        ? `${(decks[deck].baseBpm * decks[deck].tempo).toFixed(2)} BPM`
-                                                        : "—"}
-                                                </span>
                                                 <button
                                                     className="resetBtn"
                                                     onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: 1 } }))}
@@ -1728,24 +1559,22 @@ export default function MusicController() {
                                                 </button>
                                             </div>
                                             <div className="vGroup">
-                                                <span>Volume</span>
-                                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                                    <input
-                                                        className="range vRange"
-                                                        type="range"
-                                                        min={0}
-                                                        max={100}
-                                                        step={1}
-                                                        value={Math.round((decks[deck].deckVolume ?? 1) * 100)}
-                                                        onChange={(e) => {
-                                                            const v = Number(e.target.value) / 100;
-                                                            setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: v } }));
-                                                        }}
-                                                        aria-label={`${deck} volume`}
-                                                    />
-                                                    <VuMeter level={vuLevels[deck] ?? 0} />
-                                                </div>
-                                                <span>{Math.round((decks[deck].deckVolume ?? 1) * 100)}%</span>
+                                                <RangeControl
+                                                    orientation="vertical"
+                                                    min={0}
+                                                    max={100}
+                                                    step={1}
+                                                    value={Math.round((decks[deck].deckVolume ?? 1) * 100)}
+                                                    onChange={(raw) => {
+                                                        const v = raw / 100;
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: v } }));
+                                                    }}
+                                                    ariaLabel={`${deck} volume`}
+                                                    showVu={true}
+                                                    vuLevel={vuLevels[deck] ?? 0}
+													label="Volume"
+													valueText={`${Math.round((decks[deck].deckVolume ?? 1) * 100)}%`}
+                                                />
                                                 <button
                                                     className="resetBtn"
                                                     onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: 1 } }))}
@@ -1755,23 +1584,7 @@ export default function MusicController() {
                                                     ↺
                                                 </button>
                                             </div>
-                                        </div>
-                                        <div className="controls">
-                                            <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={monitorDeck === deck}
-                                                    onChange={(e) => {
-                                                        if (e.target.checked) {
-                                                            setMonitorDeck(deck);
-                                                            audioCtxRef.current?.resume?.();
-                                                        } else if (monitorDeck === deck) {
-                                                            setMonitorDeck(null);
-                                                        }
-                                                    }}
-                                                />
-                                                <span>Monitor</span>
-                                            </label>
+                                            {deck === "track_1" && playlistCol}
                                         </div>
                                     </div>
                                 </div>
@@ -1821,7 +1634,7 @@ export default function MusicController() {
                                         aria-label="Song URL"
                                     />
                                     <button
-                                        className="resetBtn"
+                                        className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80"
                                         onClick={async () => {
                                             const url = addDialogUrl.trim();
                                             if (!url) return;
@@ -1836,28 +1649,28 @@ export default function MusicController() {
                                     </button>
                                 </div>
                             </div>
-                            <div>
-                                <div style={{ marginBottom: 4, opacity: 0.8 }}>Upload File</div>
-                                <label className="resetBtn" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                                    <input
-                                        type="file"
-                                        accept="audio/*"
-                                        style={{ display: "none" }}
-                                        onChange={async (e) => {
-                                            const file = e.target.files?.[0];
-                                            if (file) {
-                                                await addFileToPlaylist(addDialogDeck, file);
-                                                setIsAddDialogOpen(false);
-                                            }
-                                            if (e.currentTarget) e.currentTarget.value = "";
-                                        }}
-                                    />
-                                    <span>Choose File…</span>
-                                </label>
-                            </div>
-                        </div>
-                        <div className="modalActions">
-                            <button className="resetBtn" onClick={() => setIsAddDialogOpen(false)}>Close</button>
+							<div>
+								<div style={{ marginBottom: 4, opacity: 0.8 }}>Upload Files</div>
+								<label className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+									<input
+										type="file"
+										accept="audio/*"
+										multiple
+										style={{ display: "none" }}
+										onChange={async (e) => {
+											const files = e.target.files;
+											if (files && files.length > 0) {
+												for (const file of Array.from(files)) {
+													await addFileToPlaylist(addDialogDeck, file);
+												}
+												setIsAddDialogOpen(false);
+											}
+											if (e.currentTarget) e.currentTarget.value = "";
+										}}
+									/>
+									<span>Choose Files…</span>
+								</label>
+							</div>
                         </div>
                     </div>
                 </div>
