@@ -1,5 +1,5 @@
+local DJStations = {}
 local LocalDJStations = {}
-local CurrentControlDJStationId = nil
 
 function UnregisterDJStation(id)
     LocalDJStations[id] = nil
@@ -26,3 +26,29 @@ function RegisterDJStation(id)
 		end)
 	}
 end
+
+RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
+    if type(id) == 'table' then
+        for id, station in pairs(id) do
+            DJStations[id] = station
+            RegisterDJStation(id)
+        end
+        return
+    end
+    DJStations[id] = station
+    RegisterDJStation(id)
+end)
+
+AddEventHandler('onResourceStart', function(resource)
+    if resource == GetCurrentResourceName() then
+        TriggerServerEvent('pickle_dj:requestDJStations')
+    end
+end)
+
+AddEventHandler('onResourceStop', function(resource)
+    if resource == GetCurrentResourceName() then
+        for id, station in pairs(DJStations) do
+            UnregisterDJStation(id)
+        end
+    end
+end)

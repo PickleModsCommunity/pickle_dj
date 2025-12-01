@@ -35,7 +35,7 @@ export default function MusicController() {
     }, []);
     // Web Audio routing
     const audioCtxRef = useRef<AudioContext | null>(null);
-    const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode; analyser?: AnalyserNode }>>({});
+    const nodesRef = useRef<Record<string, { source: MediaElementAudioSourceNode; gain: GainNode; panner: StereoPannerNode; analyser?: AnalyserNode; altSource?: MediaElementAudioSourceNode }>>({});
     const masterBusRef = useRef<GainNode | null>(null);
     const broadcastBusRef = useRef<GainNode | null>(null);
     const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
@@ -53,6 +53,8 @@ export default function MusicController() {
     const peerMapRef = useRef<Record<number, RTCPeerConnection>>({});
     const outboundTrackRef = useRef<MediaStreamTrack | null>(null);
     const streamIdRef = useRef<string | null>(null);
+    // Track per-deck iframe elements (e.g., YouTube embeds)
+    const ytIframeRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
 
     // (YouTube compatibility removed)
 
@@ -210,10 +212,15 @@ export default function MusicController() {
                 nodesRef.current["track_1"]?.source.disconnect();
                 nodesRef.current["track_1"]?.gain.disconnect();
                 nodesRef.current["track_1"]?.panner.disconnect();
+                nodesRef.current["track_1"]?.altSource?.disconnect();
                 nodesRef.current["track_2"]?.source.disconnect();
                 nodesRef.current["track_2"]?.gain.disconnect();
                 nodesRef.current["track_2"]?.panner.disconnect();
+                nodesRef.current["track_2"]?.altSource?.disconnect();
             } catch {}
+            // Remove any remaining iframes
+            try { ytIframeRefs.current["track_1"]?.remove(); ytIframeRefs.current["track_1"] = null; } catch {}
+            try { ytIframeRefs.current["track_2"]?.remove(); ytIframeRefs.current["track_2"] = null; } catch {}
             // do not close ctx to avoid pops; it will be GC'ed on page unload
             cancelled = true;
         };
@@ -520,6 +527,54 @@ export default function MusicController() {
     }
 
     // --- Playlist helpers ---
+    // Safely attempt to access an iframe's internal <video> when same-origin.
+    // Returns null for cross-origin iframes (e.g., YouTube), which are not directly accessible.
+    const tryGetIframeVideoElement = (deck: string): HTMLVideoElement | null => {
+        try {
+            const iframe = ytIframeRefs.current[deck];
+            if (!iframe) return null;
+            const doc = iframe.contentDocument || iframe.contentWindow?.document || null;
+            if (!doc) return null;
+            const video = doc.querySelector("video") as HTMLVideoElement | null;
+            return video || null;
+        } catch {
+            // Cross-origin access throws; not allowed
+            return null;
+        }
+    };
+
+    // Send a command to a YouTube iframe using its postMessage API (no direct DOM access needed).
+    const postMessageToYouTube = (deck: string, func: string, args: any[] = []) => {
+        const frame = ytIframeRefs.current[deck];
+        const win = frame?.contentWindow;
+        if (!win) return;
+        try {
+            // The player listens for this message shape
+            win.postMessage(JSON.stringify({ event: "command", func, args }), "*");
+        } catch {}
+    };
+
+    // If an accessible iframe <video> is available, route it into the deck's gain chain.
+    const attachIframeVideoToDeck = (deck: string, video: HTMLVideoElement) => {
+        try {
+            const ctx = audioCtxRef.current;
+            if (!ctx) return;
+            const chain = nodesRef.current[deck];
+            if (!chain) return;
+            // Disconnect any previous alternate source
+            try { chain.altSource?.disconnect(); } catch {}
+            chain.altSource = undefined;
+            // Avoid double output (element -> speakers) since we route via WebAudio
+            try { video.muted = true; } catch {}
+            const src = ctx.createMediaElementSource(video);
+            src.connect(chain.gain);
+            chain.altSource = src;
+            console.log("MusicController: attached iframe video to deck chain", { deck });
+        } catch (e) {
+            console.warn("MusicController: failed to attach iframe video to deck", deck, e);
+        }
+    };
+
     const deriveTitleFromUrlOrName = (input: string): string => {
         try {
             const noQuery = input.split("?")[0].split("#")[0];
@@ -632,8 +687,12 @@ export default function MusicController() {
     		const ytId = ytIdMatch ? ytIdMatch[1] : null;
     		if (ytId) {
     			const ytIframe = document.createElement("iframe");
-    			ytIframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&controls=1`;
-    			ytIframe.allow = "autoplay; encrypted-media";
+    			// Enable JS API so we can control via postMessage (still no raw DOM access)
+    			const origin = (() => {
+    				try { return encodeURIComponent(window.location.origin); } catch { return ""; }
+    			})();
+    			ytIframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&controls=1&playsinline=1&enablejsapi=1&origin=${origin}`;
+    			ytIframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
     			ytIframe.width = "320";
     			ytIframe.height = "180";
     			ytIframe.frameBorder = "0";
@@ -643,15 +702,19 @@ export default function MusicController() {
     			ytIframe.style.left = "10px";
     			ytIframe.id = `yt-iframe-${deck}`;
     			document.body.appendChild(ytIframe);
-                setTimeout(() => {
-                    console.log("Trying to get video");
-                    const video = ytIframe.contentWindow?.document.getElementById("video");
-                    if (video) {
-                        console.log("Video found", video);
-                    } else {
-                        console.log("Video not found");
-                    }
-                }, 1000);
+    			// Track ref for safe access / postMessage control
+    			ytIframeRefs.current[deck] = ytIframe;
+    			ytIframe.onload = () => {
+    				const v = tryGetIframeVideoElement(deck);
+    				if (v) {
+    					console.log("MusicController: iframe <video> accessible (same-origin)", { deck, video: v });
+    					attachIframeVideoToDeck(deck, v);
+    				} else {
+    					console.log("MusicController: iframe <video> not accessible (likely cross-origin). Use postMessage API for control.", { deck });
+    					// Example: notify player to start or query state
+    					postMessageToYouTube(deck, "playVideo");
+    				}
+    			};
     			// Remove any previous YouTube iframe for this deck when loading a new item or on cleanup
     			setTimeout(() => {
     				const prev = document.getElementById(`yt-iframe-${deck}`);
@@ -659,6 +722,21 @@ export default function MusicController() {
     			}, 100);
     		}
     	} else {
+            // If a previous iframe-based source was attached, tear it down when switching to non-YouTube
+            try {
+                const chain = nodesRef.current[deck];
+                if (chain?.altSource) {
+                    try { chain.altSource.disconnect(); } catch {}
+                    chain.altSource = undefined;
+                }
+            } catch {}
+            try {
+                const prevIframe = ytIframeRefs.current[deck];
+                if (prevIframe) {
+                    prevIframe.remove();
+                    ytIframeRefs.current[deck] = null;
+                }
+            } catch {}
             try { d.audio.pause(); } catch {}
             try {
                 d.audio.src = item.src;
@@ -753,6 +831,21 @@ export default function MusicController() {
                 try { d.audio.src = ""; } catch {}
                 try { d.audio.removeAttribute("src"); } catch {}
                 try { d.audio.currentTime = 0; d.audio.load(); } catch {}
+                // Disconnect any iframe-based alt source and remove iframe
+                try {
+                    const chain = nodesRef.current[deck];
+                    if (chain?.altSource) {
+                        try { chain.altSource.disconnect(); } catch {}
+                        chain.altSource = undefined;
+                    }
+                } catch {}
+                try {
+                    const prevIframe = ytIframeRefs.current[deck];
+                    if (prevIframe) {
+                        prevIframe.remove();
+                        ytIframeRefs.current[deck] = null;
+                    }
+                } catch {}
             }
         }
 
