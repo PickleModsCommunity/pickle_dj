@@ -19,7 +19,7 @@ type PlaylistItem = {
     id: string;
     title: string;
     src: string; // url or object URL
-    sourceType: "url" | "file";
+    sourceType: "url" | "file" | "youtube";
     baseBpm?: number | null;
 };
 
@@ -58,7 +58,7 @@ export default function MusicController() {
 
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
-    const [visible, setVisible] = useState(false);
+    const [visible, setVisible] = useState(true);
     // VU meters (0..1 normalized)
     const [vuLevels, setVuLevels] = useState<Record<string, number>>({ track_1: 0, track_2: 0, mic: 0 });
     const [masterVu, setMasterVu] = useState<number>(0);
@@ -549,9 +549,25 @@ export default function MusicController() {
         await loadPlaylistItem(deck, nextId);
     };
 
-    // (YouTube helpers removed)
+    const addYoutubeUrlToPlaylist = async (deck: string, url: string) => {
+        const item: PlaylistItem = {
+            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            title: deriveTitleFromUrlOrName(url),
+            src: url,
+            sourceType: "youtube",
+            baseBpm: null,
+        };
+        setDecks(prev => {
+            const list = prev[deck]?.playlist || [];
+            return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
+        });
+    };
 
     const addUrlToPlaylist = async (deck: string, url: string) => {
+        if (url.includes("youtube.com")) {
+            await addYoutubeUrlToPlaylist(deck, url);
+            return;
+        }
         const item: PlaylistItem = {
             id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
             title: deriveTitleFromUrlOrName(url),
@@ -610,76 +626,110 @@ export default function MusicController() {
     	if (!item) return;
     	const wasPlaying = d.isPlaying === true;
     	// Configure audio element
-    	try { d.audio.pause(); } catch {}
-    	try {
-    		d.audio.src = item.src;
-    		d.audio.currentTime = 0;
-    		d.audio.loop = false;
-    		d.audio.preload = "auto";
-    	} catch {}
-    	try {
-    		(d.audio as any).preservesPitch = false;
-    		(d.audio as any).mozPreservesPitch = false;
-    		(d.audio as any).webkitPreservesPitch = false;
-    	} catch {}
-    	try { d.audio.load(); } catch {}
-    	// Commit selection state
-    	setDecks(prev => {
-    		const prevDeck = prev[deck];
-    		if (!prevDeck) return prev;
-    		return {
-    			...prev,
-    			[deck]: {
-    				...prevDeck,
-    				baseBpm: item.baseBpm ?? null,
-    				currentTime: 0,
-    				duration: 0,
-    				isPlaying: false,
-    				objectUrl: item.sourceType === "file" ? item.src : undefined,
-    				currentItemId: item.id,
-    			}
-    		};
-    	});
-    	// Autoplay only if previously playing; guard current item
-    	const resumeIfNeeded = async () => {
-    		const latest = decksRef.current[deck];
-    		if (!latest || latest.currentItemId !== itemId) return;
-    		if (!wasPlaying) return;
-    		try { await audioCtxRef.current?.resume?.(); } catch {}
-    		try {
-    			await latest.audio.play();
-    			setDecks(prev => {
-    				const pd = prev[deck];
-    				if (!pd || pd.currentItemId !== itemId) return prev;
-    				return { ...prev, [deck]: { ...pd, isPlaying: true } };
-    			});
-    		} catch {}
-    	};
-    	try { d.audio.addEventListener("canplay", resumeIfNeeded, { once: true } as any); } catch {}
-    	// BPM analysis if missing
-    	if (item.baseBpm == null) {
-    		let bpm: number | null = null;
-    		if (item.sourceType === "url") {
-    			bpm = await analyzeBpmForUrl(item.src);
-    		} else if (item.sourceType === "file") {
-    			bpm = await (async () => {
-    				try { const res = await fetch(item.src); const b = await res.blob(); return await analyzeBpmFromBlob(b); } catch { return null; }
-    			})();
+    	if (item.sourceType === "youtube" && item.src) {
+    		// Show YouTube video as iframe overlay (for visual, not for playback)
+    		const ytIdMatch = item.src.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([A-Za-z0-9_-]{11})/);
+    		const ytId = ytIdMatch ? ytIdMatch[1] : null;
+    		if (ytId) {
+    			const ytIframe = document.createElement("iframe");
+    			ytIframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&controls=1`;
+    			ytIframe.allow = "autoplay; encrypted-media";
+    			ytIframe.width = "320";
+    			ytIframe.height = "180";
+    			ytIframe.frameBorder = "0";
+    			ytIframe.style.position = "absolute";
+    			ytIframe.style.zIndex = "1000";
+    			ytIframe.style.top = "10px";
+    			ytIframe.style.left = "10px";
+    			ytIframe.id = `yt-iframe-${deck}`;
+    			document.body.appendChild(ytIframe);
+                setTimeout(() => {
+                    console.log("Trying to get video");
+                    const video = ytIframe.contentWindow?.document.getElementById("video");
+                    if (video) {
+                        console.log("Video found", video);
+                    } else {
+                        console.log("Video not found");
+                    }
+                }, 1000);
+    			// Remove any previous YouTube iframe for this deck when loading a new item or on cleanup
+    			setTimeout(() => {
+    				const prev = document.getElementById(`yt-iframe-${deck}`);
+    				if (prev && prev !== ytIframe) prev.remove();
+    			}, 100);
     		}
-    		if (bpm) {
-    			setDecks(prev => {
-    				const list = prev[deck]?.playlist || [];
-    				const idx = list.findIndex(it => it.id === itemId);
-    				const nextList = [...list];
-    				if (idx !== -1) nextList[idx] = { ...nextList[idx], baseBpm: bpm };
-    				const isCurrent = prev[deck]?.currentItemId === itemId;
-    				return {
-    					...prev,
-    					[deck]: { ...prev[deck], playlist: nextList, baseBpm: isCurrent ? bpm : prev[deck].baseBpm }
-    				};
-    			});
-    		}
-    	}
+    	} else {
+            try { d.audio.pause(); } catch {}
+            try {
+                d.audio.src = item.src;
+                d.audio.currentTime = 0;
+                d.audio.loop = false;
+                d.audio.preload = "auto";
+            } catch {}
+            try {
+                (d.audio as any).preservesPitch = false;
+                (d.audio as any).mozPreservesPitch = false;
+                (d.audio as any).webkitPreservesPitch = false;
+            } catch {}
+            try { d.audio.load(); } catch {}
+            // Commit selection state
+            setDecks(prev => {
+                const prevDeck = prev[deck];
+                if (!prevDeck) return prev;
+                return {
+                    ...prev,
+                    [deck]: {
+                        ...prevDeck,
+                        baseBpm: item.baseBpm ?? null,
+                        currentTime: 0,
+                        duration: 0,
+                        isPlaying: false,
+                        objectUrl: item.sourceType === "file" ? item.src : undefined,
+                        currentItemId: item.id,
+                    }
+                };
+            });
+            // Autoplay only if previously playing; guard current item
+            const resumeIfNeeded = async () => {
+                const latest = decksRef.current[deck];
+                if (!latest || latest.currentItemId !== itemId) return;
+                if (!wasPlaying) return;
+                try { await audioCtxRef.current?.resume?.(); } catch {}
+                try {
+                    await latest.audio.play();
+                    setDecks(prev => {
+                        const pd = prev[deck];
+                        if (!pd || pd.currentItemId !== itemId) return prev;
+                        return { ...prev, [deck]: { ...pd, isPlaying: true } };
+                    });
+                } catch {}
+            };
+            try { d.audio.addEventListener("canplay", resumeIfNeeded, { once: true } as any); } catch {}
+            // BPM analysis if missing
+            if (item.baseBpm == null) {
+                let bpm: number | null = null;
+                if (item.sourceType === "url") {
+                    bpm = await analyzeBpmForUrl(item.src);
+                } else if (item.sourceType === "file") {
+                    bpm = await (async () => {
+                        try { const res = await fetch(item.src); const b = await res.blob(); return await analyzeBpmFromBlob(b); } catch { return null; }
+                    })();
+                }
+                if (bpm) {
+                    setDecks(prev => {
+                        const list = prev[deck]?.playlist || [];
+                        const idx = list.findIndex(it => it.id === itemId);
+                        const nextList = [...list];
+                        if (idx !== -1) nextList[idx] = { ...nextList[idx], baseBpm: bpm };
+                        const isCurrent = prev[deck]?.currentItemId === itemId;
+                        return {
+                            ...prev,
+                            [deck]: { ...prev[deck], playlist: nextList, baseBpm: isCurrent ? bpm : prev[deck].baseBpm }
+                        };
+                    });
+                }
+            }
+        }
     };
 
     const removePlaylistItem = (deck: string, itemId: string) => {
