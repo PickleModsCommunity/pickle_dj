@@ -11,37 +11,15 @@ CreateThread(function()
 end)
 
 function UnregisterMusicInstance(id)
-	LocalMusicInstances[id] = nil
+	-- No need
 end
 
 function RegisterMusicInstance(id)
-	if LocalMusicInstances[id] then UnregisterMusicInstance(id) end
-	local inst = MusicInstances[id]
-	if not inst then return end
-	LocalMusicInstances[id] = {
-		interact = CreateInteraction({
-			label = inst.name,
-			coords = inst.coords,
-			heading = inst.heading,
-		}, function(selection, targetData)
-			CurrentControlInstanceId = id
-			CreateThread(function()
-				SetNuiFocus(true, true)
-				SendNUIMessage({
-					type = 'music:setControllerVisible',
-					visible = true
-				})
-				-- Inform UI of the active instance context
-				SendNUIMessage({
-					type = 'music:setActiveInstance',
-					instanceId = id,
-					payload = {
-						name = inst.name
-					}
-				})
-			end)
-		end)
-	}
+	-- No need
+end
+
+function SetMusicController(id)
+	CurrentControlInstanceId = id
 end
 
 RegisterNetEvent("music:syncMusicInstances", function(data)

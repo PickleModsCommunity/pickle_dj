@@ -18,13 +18,6 @@ function CreateMusicInstance(name, coords, heading)
     return id
 end
 
-CreateThread(function()
-    for _, instance in pairs(Config.MusicLocations) do
-        CreateMusicInstance(instance.name, instance.coords, instance.heading)
-        print(("Created music instance %s at %s"):format(instance.name, json.encode(instance.coords)))
-    end
-end)
-
 -- TURN ICE config is fetched from Cloudflare's ephemeral credentials endpoint at runtime.
 
 local function sendTurnConfigTo(targetSrc)
