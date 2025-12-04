@@ -101,6 +101,7 @@ RegisterNetEvent('music:rtc:requestTurnConfig', function()
 end)
 
 RegisterNetEvent('music:rtc:announceBroadcast', function(data, datalen)
+	print("announceBroadcast", data, datalen)
 	local src = tonumber(source)
 	local payload = {}
 	do

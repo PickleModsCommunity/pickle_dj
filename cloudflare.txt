@@ -1,4 +1,0 @@
-curl \
-	-H "Authorization: Bearer acb4b6e83c4d4045b7ea02e3f3137a03e423550712b30a676e1d185ec5719bcd" \
-	-H "Content-Type: application/json" -d '{"ttl": 86400}' \
-	https://rtc.live.cloudflare.com/v1/turn/keys/4bffd063cdf1dc2521072d009aa5ff97/credentials/generate-ice-servers

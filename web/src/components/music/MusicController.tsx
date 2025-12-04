@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNuiEvent } from "../../providers/nui/useNui";
 import RangeControl, { VuMeter } from "./RangeControl";
 import { Mic, MicOff, Plus } from "lucide-react";
+import { fetchNui } from "@/providers/nui/fetchNui";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -40,6 +41,7 @@ export default function MusicController() {
     const broadcastBusRef = useRef<GainNode | null>(null);
     const streamDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
     const masterAnalyserRef = useRef<AnalyserNode | null>(null);
+    const monitorConnectedRef = useRef<boolean>(true);
 	const micAnalyserRef = useRef<AnalyserNode | null>(null);
     const [isBroadcasting, setIsBroadcasting] = useState(false);
     // Mic capture/mix
@@ -55,12 +57,14 @@ export default function MusicController() {
     const streamIdRef = useRef<string | null>(null);
     // Track per-deck iframe elements (e.g., YouTube embeds)
     const ytIframeRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
+    // Pollers for YT info (time, duration, title)
+    const ytPollTimersRef = useRef<Record<string, number | null>>({});
 
     // (YouTube compatibility removed)
 
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
-    const [visible, setVisible] = useState(true);
+    const [visible, setVisible] = useState(false);
     // VU meters (0..1 normalized)
     const [vuLevels, setVuLevels] = useState<Record<string, number>>({ track_1: 0, track_2: 0, mic: 0 });
     const [masterVu, setMasterVu] = useState<number>(0);
@@ -132,6 +136,7 @@ export default function MusicController() {
         masterBus.gain.value = 1.0;
         masterBus.connect(ctx.destination);
         masterBusRef.current = masterBus;
+        monitorConnectedRef.current = true;
         const broadcastBus = ctx.createGain();
         broadcastBus.gain.value = 1.0;
         broadcastBusRef.current = broadcastBus;
@@ -444,8 +449,36 @@ export default function MusicController() {
             try { micGainRef.current?.disconnect(); } catch {}
             try { micStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch {} }); } catch {}
             try { navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange); } catch {}
+            // stop YT polling
+            try {
+                (["track_1", "track_2"] as const).forEach(d => {
+                    const t = ytPollTimersRef.current[d];
+                    if (t) { clearInterval(t); ytPollTimersRef.current[d] = null; }
+                });
+            } catch {}
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isBroadcasting]);
+
+    // While broadcasting, prevent any local monitor output for the broadcaster,
+    // but keep the broadcast bus feeding the MediaStream destination.
+    useEffect(() => {
+        const ctx = audioCtxRef.current;
+        const master = masterBusRef.current;
+        if (!ctx || !master) return;
+        try {
+            if (isBroadcasting) {
+                if (monitorConnectedRef.current) {
+                    try { master.disconnect(ctx.destination); } catch {}
+                    monitorConnectedRef.current = false;
+                }
+            } else {
+                if (!monitorConnectedRef.current) {
+                    try { master.connect(ctx.destination); } catch {}
+                    monitorConnectedRef.current = true;
+                }
+            }
+        } catch {}
     }, [isBroadcasting]);
 
     // (YouTube IFrame API removed)
@@ -473,6 +506,19 @@ export default function MusicController() {
         decks.track_1.audio.playbackRate = decks.track_1.tempo;
         decks.track_2.audio.playbackRate = decks.track_2.tempo;
     }, [decks, crossfade, masterVolume, monitorDeck]);
+
+    // Push playbackRate updates to active YouTube players when tempo changes
+    useEffect(() => {
+        (["track_1", "track_2"] as const).forEach((deck) => {
+            const d = decks[deck];
+            if (!d) return;
+            const curr = d.playlist?.find(x => x.id === d.currentItemId);
+            if (!curr || curr.sourceType !== "youtube") return;
+            const rate = d.tempo || 1;
+            try { postMessageToYouTube(deck, "setPlaybackRate", [rate]); } catch {}
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [decks.track_1?.tempo, decks.track_2?.tempo, decks.track_1?.currentItemId, decks.track_2?.currentItemId]);
 
     // Apply monitor routing via stereo panners
     useEffect(() => {
@@ -565,7 +611,6 @@ export default function MusicController() {
             try { chain.altSource?.disconnect(); } catch {}
             chain.altSource = undefined;
             // Avoid double output (element -> speakers) since we route via WebAudio
-            try { video.muted = true; } catch {}
             const src = ctx.createMediaElementSource(video);
             src.connect(chain.gain);
             chain.altSource = src;
@@ -574,6 +619,83 @@ export default function MusicController() {
             console.warn("MusicController: failed to attach iframe video to deck", deck, e);
         }
     };
+
+    // Listen for YouTube iframe messages to sync title, currentTime, duration, and play state
+    useEffect(() => {
+        const onMessage = (ev: MessageEvent) => {
+            // Only handle messages from known YT iframes
+            try {
+                if (!ev || !ev.data) return;
+                const data = typeof ev.data === "string" ? (() => { try { return JSON.parse(ev.data); } catch { return null; } })() : ev.data;
+                if (!data || typeof data !== "object") return;
+                // Identify deck by matching source window
+                let fromDeck: string | null = null;
+                for (const key of Object.keys(ytIframeRefs.current)) {
+                    const f = ytIframeRefs.current[key];
+                    if (f && f.contentWindow === ev.source) { fromDeck = key; break; }
+                }
+                if (!fromDeck) return;
+                const deck = fromDeck as "track_1" | "track_2";
+                const evt = data.event;
+                if (evt === "onReady") {
+                    // Subscribe to updates and request initial info
+                    postMessageToYouTube(deck, "addEventListener", ["infoDelivery"]);
+                    postMessageToYouTube(deck, "addEventListener", ["onStateChange"]);
+                    postMessageToYouTube(deck, "getVideoData");
+                    postMessageToYouTube(deck, "getDuration");
+                    postMessageToYouTube(deck, "getCurrentTime");
+                    const t = decksRef.current[deck]?.tempo || 1;
+                    try { postMessageToYouTube(deck, "setPlaybackRate", [t]); } catch {}
+                    // Autoplay if previously playing
+                    if (decksRef.current[deck]?.isPlaying) {
+                        postMessageToYouTube(deck, "playVideo");
+                    }
+                    return;
+                }
+                if (evt === "onStateChange") {
+                    const st = data.info;
+                    if (st === 1) { // playing
+                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }) : prev);
+                    } else if (st === 2) { // paused
+                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }) : prev);
+                    } else if (st === 0) { // ended
+                        // advance playlist
+                        setTimeout(() => { try { advancePlaylist(deck); } catch {} }, 0);
+                    }
+                    return;
+                }
+                if (evt === "infoDelivery") {
+                    const info = data.info || {};
+                    // Sync time and duration
+                    if (typeof info.currentTime === "number") {
+                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], currentTime: info.currentTime } }) : prev);
+                    }
+                    if (typeof info.duration === "number" && isFinite(info.duration)) {
+                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], duration: info.duration } }) : prev);
+                    }
+                    // Sync title when available
+                    if (info.videoData && typeof info.videoData.title === "string" && info.videoData.title.trim().length > 0) {
+                        const title = info.videoData.title.trim();
+                        setDecks(prev => {
+                            const pd = prev[deck];
+                            if (!pd) return prev;
+                            const list = pd.playlist || [];
+                            const currId = pd.currentItemId;
+                            const idx = list.findIndex(it => it.id === currId);
+                            if (idx === -1) return prev;
+                            const nextList = [...list];
+                            nextList[idx] = { ...nextList[idx], title };
+                            return { ...prev, [deck]: { ...pd, playlist: nextList } };
+                        });
+                    }
+                    return;
+                }
+            } catch {}
+        };
+        window.addEventListener("message", onMessage);
+        return () => window.removeEventListener("message", onMessage);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const deriveTitleFromUrlOrName = (input: string): string => {
         try {
@@ -689,7 +811,7 @@ export default function MusicController() {
     			const ytIframe = document.createElement("iframe");
     			// Enable JS API so we can control via postMessage (still no raw DOM access)
     			const origin = (() => {
-    				try { return encodeURIComponent(window.location.origin); } catch { return ""; }
+    				try { return window.location.origin; } catch { return ""; }
     			})();
     			ytIframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&controls=1&playsinline=1&enablejsapi=1&origin=${origin}`;
     			ytIframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
@@ -704,7 +826,28 @@ export default function MusicController() {
     			document.body.appendChild(ytIframe);
     			// Track ref for safe access / postMessage control
     			ytIframeRefs.current[deck] = ytIframe;
-    			ytIframe.onload = () => {
+                // Commit selection state for YouTube items as well
+                setDecks(prev => {
+                    const prevDeck = prev[deck];
+                    if (!prevDeck) return prev;
+                    return {
+                        ...prev,
+                        [deck]: {
+                            ...prevDeck,
+                            baseBpm: item.baseBpm ?? null,
+                            currentTime: 0,
+                            duration: 0,
+                            isPlaying: false,
+                            objectUrl: undefined,
+                            currentItemId: item.id,
+                        }
+                    };
+                });
+     			ytIframe.onload = () => {
+                    // Kick off handshake per YT embed protocol
+                    try {
+                        ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: ytIframe.id, channel: "widget" }), "*");
+                    } catch {}
     				const v = tryGetIframeVideoElement(deck);
     				if (v) {
     					console.log("MusicController: iframe <video> accessible (same-origin)", { deck, video: v });
@@ -714,6 +857,28 @@ export default function MusicController() {
     					// Example: notify player to start or query state
     					postMessageToYouTube(deck, "playVideo");
     				}
+                    // Subscribe to events and fetch initial info
+                    try {
+                        postMessageToYouTube(deck, "addEventListener", ["onReady"]);
+                        postMessageToYouTube(deck, "addEventListener", ["infoDelivery"]);
+                        postMessageToYouTube(deck, "addEventListener", ["onStateChange"]);
+                        postMessageToYouTube(deck, "getVideoData");
+                        postMessageToYouTube(deck, "getDuration");
+                        postMessageToYouTube(deck, "getCurrentTime");
+                        const t = decksRef.current[deck]?.tempo || 1;
+                        postMessageToYouTube(deck, "setPlaybackRate", [t]);
+                    } catch {}
+                    // Start polling for robustness
+                    try {
+                        // Clear any existing poller
+                        const prev = ytPollTimersRef.current[deck];
+                        if (prev) { clearInterval(prev); ytPollTimersRef.current[deck] = null; }
+                        ytPollTimersRef.current[deck] = window.setInterval(() => {
+                            postMessageToYouTube(deck, "getCurrentTime");
+                            postMessageToYouTube(deck, "getDuration");
+                            postMessageToYouTube(deck, "getVideoData");
+                        }, 500);
+                    } catch {}
     			};
     			// Remove any previous YouTube iframe for this deck when loading a new item or on cleanup
     			setTimeout(() => {
@@ -736,6 +901,11 @@ export default function MusicController() {
                     prevIframe.remove();
                     ytIframeRefs.current[deck] = null;
                 }
+            } catch {}
+            // Stop any YT polling for this deck
+            try {
+                const t = ytPollTimersRef.current[deck];
+                if (t) { clearInterval(t); ytPollTimersRef.current[deck] = null; }
             } catch {}
             try { d.audio.pause(); } catch {}
             try {
@@ -954,7 +1124,20 @@ export default function MusicController() {
             return;
         }
 
-        // (YouTube player handling removed)
+        // Handle YouTube items via postMessage API
+        if (currentItem.sourceType === "youtube") {
+            if (d.isPlaying) {
+                postMessageToYouTube(deck, "pauseVideo");
+                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
+            } else {
+                try { await audioCtxRef.current?.resume?.(); } catch {}
+                postMessageToYouTube(deck, "playVideo");
+                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
+            }
+            return;
+        }
+
+        // HTML audio handling
         const ctx = audioCtxRef.current;
         if (d.isPlaying) {
             d.audio.pause();
@@ -1163,6 +1346,23 @@ export default function MusicController() {
         raf = requestAnimationFrame(tick);
         return () => cancelAnimationFrame(raf);
     }, []);
+
+    // Keyboard shortcut handler: ESC/Backspace to hide controller
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (
+                (e.key === "Escape" || e.key === "Esc" || e.key === "Backspace")
+                && visible
+            ) {
+                fetchNui("setVisible", { visible: false });
+                e.preventDefault();
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => {
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [visible]);
 
     return (decks.track_1 && decks.track_2 && visible) ? (
         <div className="bg-background p-4 rounded-md absolute bottom-[20px] left-[50%] translate-x-[-50%]" style={{ display: "flex", flexDirection: "column", width: "1280px" }}>
@@ -1541,7 +1741,7 @@ export default function MusicController() {
                                 <div className="mixerRow w-full" style={{ gap: 12, justifyContent: "center" }}>
                                     <button
                                         className="bg-secondary px-4 w-full py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80"
-                                        onClick={startBroadcast}
+                                        onClick={isBroadcasting ? stopBroadcast : startBroadcast}
                                         aria-label="Start broadcasting mix to clients"
                                         title="Start broadcasting mix to clients"
                                     >
@@ -1667,8 +1867,15 @@ export default function MusicController() {
                                                 step={0.01}
                                                 value={Math.min(decks[deck].currentTime || 0, decks[deck].duration || 0)}
                                                 onChange={(to) => {
-                                                    decks[deck].audio.currentTime = to;
-                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
+                                                    const curr = decks[deck];
+                                                    const currentItem = curr.playlist?.find(x => x.id === curr.currentItemId);
+                                                    if (currentItem?.sourceType === "youtube") {
+                                                        postMessageToYouTube(deck, "seekTo", [to, true]);
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
+                                                    } else {
+                                                        curr.audio.currentTime = to;
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
+                                                    }
                                                 }}
                                                 ariaLabel={`${deck} position`}
                                                 disabled={!decks[deck].duration || decks[deck].duration === 0}
@@ -1686,7 +1893,13 @@ export default function MusicController() {
                                                     step={1}
                                                     value={Math.round(decks[deck].tempo * 100)}
                                                     onChange={(v) => {
-                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: v / 100 } }));
+                                                        const nextTempo = v / 100;
+                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: nextTempo } }));
+                                                        // If YouTube, push rate immediately
+                                                        const currentItem = decks[deck].playlist?.find(x => x.id === decks[deck].currentItemId);
+                                                        if (currentItem?.sourceType === "youtube") {
+                                                            postMessageToYouTube(deck, "setPlaybackRate", [nextTempo]);
+                                                        }
                                                     }}
                                                     ariaLabel={`${deck} tempo`}
 													label="Tempo"
