@@ -1354,8 +1354,10 @@ export default function MusicController() {
                 (e.key === "Escape" || e.key === "Esc" || e.key === "Backspace")
                 && visible
             ) {
-                fetchNui("setVisible", { visible: false });
-                e.preventDefault();
+                setVisible(false);
+                fetchNui("setVisible", { visible: false }).then(() => {
+                    e.preventDefault();
+                });
             }
         };
         window.addEventListener("keydown", handleKeyDown);

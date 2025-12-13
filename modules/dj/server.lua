@@ -11,6 +11,7 @@ function RegisterDJStation(station, skipSync)
         heading = station.heading or 0.0,
         streamId = station.streamId or nil,
         prop = station.prop or nil,
+        speakers = station.speakers or nil,
     }
     if skipSync then return id end
     TriggerClientEvent('pickle_dj:registerDJStation', -1, id, station)
@@ -19,12 +20,13 @@ end
 
 CreateThread(function()
     for _, instance in pairs(Config.DJStations) do
-        local streamId = CreateMusicInstance(instance.name, instance.coords, instance.heading)
+        local streamId = CreateMusicInstance(instance.name, instance.coords, instance.heading, instance.speakers)
         RegisterDJStation({
             name = instance.name,
             coords = instance.coords,
             heading = instance.heading,
             prop = instance.prop,
+            speakers = instance.speakers,
             streamId = streamId,
         }, true)
         print(("Created dj instance %s at %s"):format(instance.name, json.encode(instance.coords)))

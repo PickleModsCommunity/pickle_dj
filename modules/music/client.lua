@@ -184,16 +184,55 @@ CreateThread(function()
 		local nearestId = nil
 		local nearestDist = 999999.0
 		for id, inst in pairs(MusicInstances) do
-			if inst and inst.streamId ~= nil and inst.broadcaster ~= nil and inst.coords ~= nil then
-				local dist = #(pcoords - inst.coords)
-				if dist < nearestDist then
-					nearestDist = dist
+			if inst and inst.streamId ~= nil and inst.broadcaster ~= nil then
+				-- choose the minimum distance to any speaker if present, else to booth coords
+				local minInstDist = 999999.0
+				if inst.speakers and type(inst.speakers) == "table" and #inst.speakers > 0 then
+					for _, sp in ipairs(inst.speakers) do
+						if sp.coords then
+							local d = #(pcoords - sp.coords)
+							if d < minInstDist then minInstDist = d end
+						end
+					end
+				elseif inst.coords ~= nil then
+					minInstDist = #(pcoords - inst.coords)
+				end
+				if minInstDist < nearestDist then
+					nearestDist = minInstDist
 					nearestId = id
 				end
 			end
 		end
-		local radius = (Config and Config.MusicRadius) or 50.0
-		if nearestId ~= nil and nearestDist <= radius then
+		local controllerRadius = (Config and Config.MusicRadius) or 50.0
+		if nearestId ~= nil then
+			-- Determine if listener is within range of the nearest instance using per-speaker radii
+			local __inRange = false
+			do
+				local inst = MusicInstances[nearestId]
+				if inst then
+					if inst.speakers and type(inst.speakers) == "table" and #inst.speakers > 0 then
+						for _, sp in ipairs(inst.speakers) do
+							if sp.coords then
+								local spec = (Config and Config.SpeakerProps and sp.speakerType and Config.SpeakerProps[sp.speakerType]) or nil
+								local r = (spec and spec.soundRadius) or 0.0
+								if r > 0.0 then
+									local d = #(pcoords - sp.coords)
+									if d <= r then
+										__inRange = true
+										break
+									end
+								end
+							end
+						end
+					elseif inst.coords ~= nil then
+						local d = #(pcoords - inst.coords)
+						if d <= controllerRadius then
+							__inRange = true
+						end
+					end
+				end
+			end
+			if __inRange then
 			wait = 0
 			if CurrentListeningInstanceId ~= nearestId then
 				-- Switch to this instance
@@ -226,43 +265,79 @@ CreateThread(function()
 					}
 				})
 			end
-			-- Distance-based linear attenuation (0..1)
-			local vol = 1.0 - (nearestDist / radius)
-			if vol < 0.0 then vol = 0.0 end
-			if vol > 1.0 then vol = 1.0 end
+			-- Multi-speaker attenuation and panning
+			local inst2 = MusicInstances[nearestId]
+			local speakers = nil
+			if inst2.speakers and type(inst2.speakers) == "table" and #inst2.speakers > 0 then
+				speakers = inst2.speakers
+			elseif inst2.coords then
+				-- Fallback "controller" speaker uses Config.MusicRadius
+				speakers = { { coords = inst2.coords, __controller = true } }
+			else
+				speakers = {}
+			end
+			-- accumulate contributions from all in-range speakers
+			local totalWeight = 0.0
+			local sumPan = 0.0
+			local maxVol = 0.0
+			for _, sp in ipairs(speakers) do
+				if sp.coords then
+					local d = #(pcoords - sp.coords)
+					local r = 0.0
+					if sp.__controller then
+						r = controllerRadius
+					else
+						local spec = (Config and Config.SpeakerProps and sp.speakerType and Config.SpeakerProps[sp.speakerType]) or nil
+						r = (spec and spec.soundRadius) or 0.0
+					end
+					local w = 0.0
+					if r > 0.0 then
+						w = 1.0 - (d / r)
+					end
+					if w < 0.0 then w = 0.0 end
+					if w > 1.0 then w = 1.0 end
+					if w > 0.0 then
+						-- panning for this speaker
+						local toX = (sp.coords.x - pcoords.x)
+						local toY = (sp.coords.y - pcoords.y)
+						local len = math.sqrt(toX * toX + toY * toY)
+						local pan_i = 0.0
+						if len > 0.0001 then
+							toX = toX / len
+							toY = toY / len
+							local camRot = GetGameplayCamRot(0) or vector3(0.0, 0.0, 0.0)
+							local heading = camRot.z or 0.0
+							local rad = math.rad(heading)
+							local fx = -math.sin(rad)
+							local fy = math.cos(rad)
+							local rx = fy
+							local ry = -fx
+							pan_i = (toX * rx) + (toY * ry)
+							if pan_i < -1.0 then pan_i = -1.0 end
+							if pan_i > 1.0 then pan_i = 1.0 end
+						end
+						totalWeight = totalWeight + w
+						sumPan = sumPan + (w * pan_i)
+						-- For volume, sum contributions but clamp at 1.0
+						maxVol = maxVol + w
+					end
+				end
+			end
+			if maxVol > 1.0 then maxVol = 1.0 end
 			SendNUIMessage({
 				type = 'music:setVolume',
-				payload = { volume = vol }
+				payload = { volume = maxVol }
 			})
-			local inst2 = MusicInstances[nearestId]
-			local toSrcX = (inst2.coords.x - pcoords.x)
-			local toSrcY = (inst2.coords.y - pcoords.y)
-			local len = math.sqrt(toSrcX * toSrcX + toSrcY * toSrcY)
-			if len > 0.0001 then
-				toSrcX = toSrcX / len
-				toSrcY = toSrcY / len
-				local camRot = GetGameplayCamRot(0) or vector3(0.0, 0.0, 0.0)
-				local heading = camRot.z or 0.0
-				local rad = math.rad(heading)
-				-- GTA/FiveM: heading 0 faces north (positive Y). Forward vector:
-				-- fx = -sin(heading), fy = cos(heading)
-				local fx = -math.sin(rad)
-				local fy = math.cos(rad)
-				local rx = fy
-				local ry = -fx
-				local pan = (toSrcX * rx) + (toSrcY * ry)
+			local pan = 0.0
+			if totalWeight > 0.0001 then
+				pan = sumPan / totalWeight
 				if pan < -1.0 then pan = -1.0 end
 				if pan > 1.0 then pan = 1.0 end
-				SendNUIMessage({
-					type = 'music:setPanning',
-					payload = { pan = pan }
-				})
-			else
-				SendNUIMessage({
-					type = 'music:setPanning',
-					payload = { pan = 0.0 }
-				})
 			end
+			SendNUIMessage({
+				type = 'music:setPanning',
+				payload = { pan = pan }
+			})
 		else
 			if CurrentListeningInstanceId ~= nil then
 				-- Leave current instance
@@ -280,6 +355,7 @@ CreateThread(function()
 					payload = { pan = 0.0 }
 				})
 			end
+		end
 		end
 		::__after_listen_tick::
 		Wait(wait)

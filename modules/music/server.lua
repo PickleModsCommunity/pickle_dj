@@ -1,21 +1,23 @@
 local MusicInstances = {}
 
-function CreateMusicInstance(name, coords, heading)
-    local instance = {
-        name = name,
-        coords = coords,
-        heading = heading,
-        broadcaster = nil,
-        streamId = nil,
-    }
-    local id
-    repeat 
-        id = math.random(1, 999999)
-    until not MusicInstances[id]
-    MusicInstances[id] = instance
+function CreateMusicInstance(name, coords, heading, speakers)
+	local instance = {
+		name = name,
+		coords = coords,
+		heading = heading,
+		broadcaster = nil,
+		streamId = nil,
+		-- optional list of speaker definitions: { { speakerType=string, coords=vec3, heading=number }, ... }
+		speakers = speakers or nil,
+	}
+	local id
+	repeat 
+		id = math.random(1, 999999)
+	until not MusicInstances[id]
+	MusicInstances[id] = instance
 	-- broadcast creation to all clients
 	TriggerClientEvent("music:musicInstanceUpdated", -1, id, instance)
-    return id
+	return id
 end
 
 -- TURN ICE config is fetched from Cloudflare's ephemeral credentials endpoint at runtime.
