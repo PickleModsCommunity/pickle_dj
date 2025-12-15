@@ -83,6 +83,20 @@ RegisterNetEvent("music:requestSync", function()
 	TriggerClientEvent("music:syncMusicInstances", src, MusicInstances)
 end)
 
+-- Update music instance speakers (called when speakers are added/removed)
+RegisterNetEvent('pickle_dj:updateMusicInstanceSpeakers', function(musicInstanceId, speakers)
+	if not musicInstanceId or not MusicInstances[musicInstanceId] then
+		return
+	end
+	
+	local instance = MusicInstances[musicInstanceId]
+	instance.speakers = speakers
+	
+	-- Broadcast updated instance to all clients
+	TriggerClientEvent("music:musicInstanceUpdated", -1, musicInstanceId, instance)
+	print(("^2[music]^0 Updated speakers for instance %s"):format(musicInstanceId))
+end)
+
 AddEventHandler('playerDropped', function()
 	local src = tonumber(source)
 	-- If a player was a broadcaster for any instance, clear those instances

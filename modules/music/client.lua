@@ -331,8 +331,8 @@ CreateThread(function()
 			local pan = 0.0
 			if totalWeight > 0.0001 then
 				pan = sumPan / totalWeight
-				if pan < -1.0 then pan = -1.0 end
-				if pan > 1.0 then pan = 1.0 end
+				if pan < -0.9 then pan = -0.9 end
+				if pan > 0.9 then pan = 0.9 end
 			end
 			SendNUIMessage({
 				type = 'music:setPanning',
