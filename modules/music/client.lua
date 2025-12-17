@@ -22,6 +22,9 @@ function SetMusicController(id)
 	CurrentControlInstanceId = id
 end
 
+-- Export function for other resources
+exports('SetMusicController', SetMusicController)
+
 RegisterNetEvent("music:syncMusicInstances", function(data)
 	for k,v in pairs(data) do
 		MusicInstances[k] = v
@@ -54,10 +57,56 @@ end)
 RegisterNUICallback('music_rtc_announce_broadcast', function(data, cb)
 	-- Ensure instanceId is set (use the controller the player opened)
 	local payload = data or {}
-	if payload.instanceId == nil then payload.instanceId = CurrentControlInstanceId end
+	print("[music] NUI announceBroadcast callback received", json.encode(payload), "CurrentControlInstanceId:", CurrentControlInstanceId)
+	
+	-- Convert instanceId to number if it's a string
+	if payload.instanceId ~= nil then
+		payload.instanceId = tonumber(payload.instanceId) or payload.instanceId
+	end
+	-- Fallback to CurrentControlInstanceId if instanceId is still nil
+	if payload.instanceId == nil then 
+		payload.instanceId = CurrentControlInstanceId 
+		print("[music] Using CurrentControlInstanceId fallback:", payload.instanceId)
+	end
+	-- Ensure instanceId is a number
+	if payload.instanceId ~= nil then
+		payload.instanceId = tonumber(payload.instanceId)
+	end
+	
+	-- Validate that we have a valid instanceId before proceeding
+	-- This should only be called when a player opens the DJ controller
+	if payload.instanceId == nil or payload.instanceId == 0 then
+		print("[music] ERROR: Cannot announce broadcast - instanceId is nil or invalid. This should only happen when a player opens the DJ controller.")
+		print("[music] This may indicate a stale broadcast attempt or the controller was opened before the music instance was ready.")
+		if cb then cb({ ok = false, error = "instanceId is nil or invalid" }) end
+		return
+	end
+	
+	print("[music] NUI announceBroadcast sending to server", json.encode(payload))
+	-- If streamId is provided, use it; otherwise let server generate one
+	-- Note: Server will validate and may override streamId if needed
 	local enc = json.encode(payload)
 	TriggerServerEvent('music:rtc:announceBroadcast', enc, #enc)
 	if cb then cb({ ok = true }) end
+end)
+
+-- Handle automatic broadcast start from server
+RegisterNetEvent('pickle_dj:startBroadcasting', function(musicInstanceId, streamId)
+	print("[music] Received pickle_dj:startBroadcasting", musicInstanceId, streamId, type(musicInstanceId))
+	-- Set the current control instance (this is critical for the NUI callback to know which instance)
+	CurrentControlInstanceId = tonumber(musicInstanceId) or musicInstanceId
+	print("[music] Set CurrentControlInstanceId to", CurrentControlInstanceId)
+	-- Note: The dj/client.lua also handles this event to send to NUI
+	-- We just set CurrentControlInstanceId here
+end)
+
+-- Handle automatic broadcast stop from server
+RegisterNetEvent('pickle_dj:stopBroadcasting', function()
+	-- Send to NUI to stop broadcasting
+	SendNUIMessage({
+		type = 'music:stopAutoBroadcast',
+		data = {}
+	})
 end)
 
 RegisterNUICallback('music_rtc_stop_broadcast', function(data, cb)

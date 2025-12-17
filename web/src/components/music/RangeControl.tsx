@@ -7,17 +7,19 @@ type RangeControlProps = {
 	step?: number;
 	onChange: (value: number) => void;
 	orientation?: "horizontal" | "vertical";
+	barStyle?: React.CSSProperties;
 	ariaLabel?: string;
 	disabled?: boolean;
 	showVu?: boolean;
 	vuLevel?: number; // 0..1
+	vuMeterStyle?: React.CSSProperties;
 	label?: React.ReactNode;
 	valueText?: React.ReactNode;
 	className?: string;
 	style?: React.CSSProperties;
 };
 
-export function VuMeter({ level }: { level: number }) {
+export function VuMeter({ meterStyle, level }: { meterStyle?: React.CSSProperties, level: number }) {
 	const segments = 12;
 	const lit = Math.max(0, Math.min(segments, Math.round(level * segments)));
 	const segs = [];
@@ -37,7 +39,7 @@ export function VuMeter({ level }: { level: number }) {
 		);
 	}
 	return (
-		<div className="vu">
+		<div className="vu" style={meterStyle}>
 			{segs}
 		</div>
 	);
@@ -51,10 +53,12 @@ export default function RangeControl(props: RangeControlProps) {
 		step = 1,
 		onChange,
 		orientation = "horizontal",
+		barStyle,
 		ariaLabel,
 		disabled,
 		showVu = false,
 		vuLevel = 0,
+		vuMeterStyle,
 		label,
 		valueText,
 		className,
@@ -68,7 +72,7 @@ export default function RangeControl(props: RangeControlProps) {
 			<div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, height: "100%", ...style }}>
 				{label != null ? <span className="text-xs font-semibold whitespace-nowrap">{label}</span> : null}
 				<div style={{ display: "flex", position: "relative", alignItems: "center", gap: 6, height: "100%" }}>
-		            <div className="absolute w-28 top-[50%] translate-y-[-50%] pointer-events-none select-none" style={{ left: showVu ? "-65px" : "-52.5px" }}>
+		            <div className="absolute w-28 top-[50%] translate-y-[-50%] pointer-events-none select-none" style={{ left: showVu ? "-65px" : "-52.5px", ...barStyle }}>
 		                <input
 		                    className={`${inputClass} pointer-events-auto`}
 							draggable={false}
@@ -82,7 +86,7 @@ export default function RangeControl(props: RangeControlProps) {
 		                    disabled={disabled}
 		                />
 		            </div>
-		            <div className="absolute h-28 top-[50%] translate-y-[-50%] right-[-16px]">
+		            <div className="absolute h-28 top-[50%] translate-y-[-50%] right-[-16px]" style={vuMeterStyle}>
 		                {showVu ? <VuMeter level={vuLevel} /> : null}
 		            </div>
 				</div>

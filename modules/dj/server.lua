@@ -16,18 +16,21 @@ local function getStationLightControls(stationId)
                     rotateHorizontal = true,
                     rotateVertical = false,
                     flash = GetFlashValue("low"), -- low
+                    speed = GetSpeedValue("normal"), -- normal = 2.0
                 },
                 spotlight = {
                     enabled = true,
                     rotateHorizontal = true,
                     rotateVertical = false, 
                     flash = GetFlashValue("off"), -- off
+                    speed = GetSpeedValue("normal"), -- normal = 2.0
                 },
                 barlight = {
                     enabled = true,
                     rotateHorizontal = true,
                     rotateVertical = true,
                     flash = GetFlashValue("low"), -- low
+                    speed = GetSpeedValue("normal"), -- normal = 2.0
                 }
             }
         }
@@ -532,6 +535,12 @@ RegisterNetEvent('pickle_dj:updateLightControls', function(stationId, lightType,
         if numericValue then
             controls.lights[lightType].flash = numericValue
         end
+    elseif property == "speed" then
+        -- Use shared function to convert string to number
+        numericValue = GetSpeedValue(value)
+        if numericValue then
+            controls.lights[lightType].speed = numericValue
+        end
     end
     
     -- Network the update to all clients with the numeric value from server
@@ -569,11 +578,156 @@ RegisterNetEvent('pickle_dj:updateAllLightControls', function(stationId, propert
             if numericValue then
                 controls.lights[lightType].flash = numericValue
             end
+        elseif property == "speed" then
+            -- Use shared function to convert string to number
+            numericValue = GetSpeedValue(value)
+            if numericValue then
+                controls.lights[lightType].speed = numericValue
+            end
         end
         
         -- Network the update to all clients with the numeric value from server
         TriggerClientEvent('pickle_dj:lightControlsUpdated', -1, stationId, lightType, property, numericValue)
         
         ::continue_light::
+    end
+end)
+
+-- Handle DJ controller opening - automatically assign broadcaster
+RegisterNetEvent('pickle_dj:openController', function(stationId)
+    local source = source
+    local station = DJStations[stationId]
+    if not station or not station.streamId then
+        print(("[pickle_dj] ERROR: Cannot open controller - station %s not found or missing streamId"):format(tostring(stationId)))
+        return
+    end
+    
+    -- Get the music instance for this station
+    local musicInstanceId = station.streamId
+    local MusicInstances = exports['pickle_clubs']:GetMusicInstances() or {}
+    local inst = MusicInstances[musicInstanceId]
+    if not inst then
+        print(("[pickle_dj] ERROR: Cannot open controller - music instance %s not found"):format(tostring(musicInstanceId)))
+        return
+    end
+    
+    -- Ensure musicInstanceId is valid
+    if not musicInstanceId or musicInstanceId == nil then
+        print(("[pickle_dj] ERROR: Cannot open controller - invalid musicInstanceId: %s"):format(tostring(musicInstanceId)))
+        return
+    end
+    
+    -- If player is already broadcasting on this exact table, don't do anything
+    -- The client is already broadcasting and connections are established
+    -- No need to send the event which could reset connections
+    if inst.broadcaster == source and inst.streamId ~= nil then
+        -- Player is already broadcasting on this table, just return
+        -- Client state should already be in sync
+        return
+    end
+    
+    -- Check if player is already broadcasting on another table
+    for id, otherInst in pairs(MusicInstances) do
+        if otherInst.broadcaster == source and id ~= musicInstanceId then
+            -- Remove them from the other table
+            otherInst.broadcaster = nil
+            otherInst.streamId = nil
+            TriggerClientEvent("music:musicInstanceUpdated", -1, id, otherInst)
+            TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
+        end
+    end
+    
+    -- Only allow one broadcaster per instance; replace if same src, ignore if different and already active
+    if inst.broadcaster ~= nil and inst.broadcaster ~= source then
+        -- Another player is already broadcasting, don't replace them
+        return
+    end
+    
+    -- Generate streamId for this broadcaster
+    local streamId = tostring(source) .. "_" .. tostring(math.random(100000, 999999))
+    
+    -- Pre-set the broadcaster and streamId so the instance is marked as active
+    -- The client will then announce the broadcast when ready, which will confirm/update this
+    inst.broadcaster = source
+    inst.streamId = streamId
+    
+    -- Notify client to start broadcasting (client will announce via music:rtc:announceBroadcast when ready)
+    TriggerClientEvent('pickle_dj:startBroadcasting', source, musicInstanceId, streamId)
+    
+    -- Push updated instance to clients
+    TriggerClientEvent("music:musicInstanceUpdated", -1, musicInstanceId, inst)
+    -- legacy: notify broadcast started
+    TriggerClientEvent('music:rtc:broadcastStarted', -1, json.encode({ streamId = streamId, broadcaster = source }))
+end)
+
+-- Note: We no longer stop broadcasting when controller closes
+-- Broadcasting continues until player leaves range of all speakers (handled by range check thread)
+
+-- Check if broadcaster is in range of speakers (called periodically)
+CreateThread(function()
+    while true do
+        Wait(5000) -- Check every 5 seconds
+        
+        local MusicInstances = exports['pickle_clubs']:GetMusicInstances() or {}
+        for instanceId, inst in pairs(MusicInstances) do
+            if inst.broadcaster and inst.streamId then
+                local broadcasterSrc = inst.broadcaster
+                local broadcasterPed = GetPlayerPed(broadcasterSrc)
+                if not broadcasterPed or broadcasterPed == 0 then
+                    -- Player disconnected, remove broadcaster
+                    inst.broadcaster = nil
+                    inst.streamId = nil
+                    TriggerClientEvent("music:musicInstanceUpdated", -1, instanceId, inst)
+                    TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
+                    goto continue_instance
+                end
+                
+                local broadcasterCoords = GetEntityCoords(broadcasterPed)
+                if not broadcasterCoords or broadcasterCoords.x == 0.0 then
+                    -- Invalid coords, remove broadcaster
+                    inst.broadcaster = nil
+                    inst.streamId = nil
+                    TriggerClientEvent("music:musicInstanceUpdated", -1, instanceId, inst)
+                    TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
+                    goto continue_instance
+                end
+                
+                -- Check if broadcaster is in range of any speaker
+                local inRange = false
+                if inst.speakers and type(inst.speakers) == "table" and #inst.speakers > 0 then
+                    for _, sp in ipairs(inst.speakers) do
+                        if sp.coords then
+                            local spec = (Config and Config.SpeakerProps and sp.speakerType and Config.SpeakerProps[sp.speakerType]) or nil
+                            local r = (spec and spec.soundRadius) or 0.0
+                            if r > 0.0 then
+                                local d = #(broadcasterCoords - sp.coords)
+                                if d <= r then
+                                    inRange = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                elseif inst.coords then
+                    -- Fallback to controller coords with default radius
+                    local controllerRadius = Config.MusicRadius or 50.0
+                    local d = #(broadcasterCoords - inst.coords)
+                    if d <= controllerRadius then
+                        inRange = true
+                    end
+                end
+                
+                -- If broadcaster is out of range, remove them
+                if not inRange then
+                    inst.broadcaster = nil
+                    inst.streamId = nil
+                    TriggerClientEvent("music:musicInstanceUpdated", -1, instanceId, inst)
+                    TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
+                    TriggerClientEvent('pickle_dj:stopBroadcasting', broadcasterSrc)
+                end
+                
+                ::continue_instance::
+            end
+        end
     end
 end)

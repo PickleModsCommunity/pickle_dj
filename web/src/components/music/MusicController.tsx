@@ -299,25 +299,87 @@ export default function MusicController() {
 
     // (no-op placeholder removed: chunk-based streaming is no longer used)
 
-    const startBroadcast = async () => {
-        if (isBroadcasting) return;
-        const ctx = audioCtxRef.current;
-        const streamNode = streamDestRef.current;
-        if (!ctx || !streamNode) return;
-        try { await ctx.resume?.(); } catch {}
+    // Legacy startBroadcast function - should not be used anymore
+    // Broadcasting is now handled automatically via music:startAutoBroadcast event
+    // This function is kept for backwards compatibility but will not start broadcasts
+    const startBroadcast = async (providedStreamId?: string, instanceId?: number) => {
+        // This function should never be called - broadcasting is handled via music:startAutoBroadcast event
+        console.warn("MusicController: startBroadcast() called - this is legacy code and should not be used. Broadcasting is handled via music:startAutoBroadcast event.");
+        return;
+    };
 
-        const stream = streamNode.stream;
-        const audioTracks = stream.getAudioTracks();
-        outboundTrackRef.current = (audioTracks && audioTracks[0]) ? audioTracks[0] : null;
-
-        const streamId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-        streamIdRef.current = streamId;
-        await nuiPost("music_rtc_announce_broadcast", { streamId });
-        console.log("MusicController: broadcast announced", { streamId, hasTrack: !!outboundTrackRef.current });
-        setIsBroadcasting(true);
+    // Reset controller to default state
+    const resetController = () => {
+        console.log("MusicController: Resetting to default state");
+        
+        // Stop all playing tracks and reset audio elements
+        setDecks(prev => {
+            const updated: Record<string, Deck> = {};
+            for (const [key, deck] of Object.entries(prev)) {
+                try {
+                    deck.audio.pause();
+                    deck.audio.currentTime = 0;
+                    // Reset playback rate (tempo)
+                    deck.audio.playbackRate = 1.0;
+                } catch {}
+                
+                // Reset to initial state with default track
+                const makeInitialItem = (src: string) => ({
+                    id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                    title: src.split('/').pop() || 'Track',
+                    src,
+                    sourceType: "url" as const,
+                    baseBpm: null,
+                });
+                
+                const initialTrack = key === 'track_1' 
+                    ? makeInitialItem("/nui/audio/track_1.mp3")
+                    : makeInitialItem("/nui/audio/track_2.mp3");
+                
+                updated[key] = {
+                    ...deck,
+                    isPlaying: false,
+                    tempo: 1,
+                    currentTime: 0,
+                    deckVolume: 1,
+                    playlist: [initialTrack],
+                    currentItemId: initialTrack.id,
+                };
+            }
+            return updated;
+        });
+        
+        // Reset settings
+        setCrossfade(0.5);
+        setMasterVolume(1);
+        setMonitorDeck(null);
+        setVuLevels({ track_1: 0, track_2: 0, mic: 0 });
+        setMasterVu(0);
+        
+        // Reset audio node gains and panners
         try {
-            (window as any).__musicBroadcastStreamId = streamId;
-            (window as any).__musicIsBroadcaster = true;
+            if (nodesRef.current["track_1"]) {
+                if (nodesRef.current["track_1"].gain) {
+                    nodesRef.current["track_1"].gain.gain.value = 1;
+                }
+                if (nodesRef.current["track_1"].panner) {
+                    nodesRef.current["track_1"].panner.pan.value = 0;
+                }
+            }
+            if (nodesRef.current["track_2"]) {
+                if (nodesRef.current["track_2"].gain) {
+                    nodesRef.current["track_2"].gain.gain.value = 1;
+                }
+                if (nodesRef.current["track_2"].panner) {
+                    nodesRef.current["track_2"].panner.pan.value = 0;
+                }
+            }
+            if (masterBusRef.current) {
+                masterBusRef.current.gain.value = 1.0;
+            }
+            if (broadcastBusRef.current) {
+                broadcastBusRef.current.gain.value = 1.0;
+            }
         } catch {}
     };
 
@@ -342,6 +404,10 @@ export default function MusicController() {
             (window as any).__musicIsBroadcaster = false;
             (window as any).__musicBroadcastStreamId = null;
         } catch {}
+        
+        // Reset controller to default state
+        resetController();
+        
         // turn off mic if enabled
         try {
             if (isMicOn) {
@@ -430,16 +496,18 @@ export default function MusicController() {
         } catch {}
     });
 
-    // Auto-start broadcasting once decks/graph are ready
-    useEffect(() => {
-        // Start once when both decks are initialized and stream node exists
-        if (isBroadcasting) return;
-        if (!decks.track_1 || !decks.track_2) return;
-        if (!audioCtxRef.current || !streamDestRef.current) return;
-        // Best-effort kickoff (safe to call if already recording due to guard above)
-        startBroadcast();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [!!decks.track_1, !!decks.track_2]);
+    // REMOVED: Auto-start broadcasting on mount
+    // Broadcasting should only start when a player opens the DJ controller via music:startAutoBroadcast event
+    // This prevents broadcasts from starting on resource start
+    // useEffect(() => {
+    //     // Start once when both decks are initialized and stream node exists
+    //     if (isBroadcasting) return;
+    //     if (!decks.track_1 || !decks.track_2) return;
+    //     if (!audioCtxRef.current || !streamDestRef.current) return;
+    //     // Best-effort kickoff (safe to call if already recording due to guard above)
+    //     startBroadcast();
+    //     // eslint-disable-next-line react-hooks/exhaustive-deps
+    // }, [!!decks.track_1, !!decks.track_2]);
 
     // Stop broadcasting on unmount if still active
     useEffect(() => {
@@ -1172,6 +1240,94 @@ export default function MusicController() {
         if (data.stationId) {
             setCurrentStationId(data.stationId);
         }
+        // Note: We don't stop broadcasting when controller closes
+        // Broadcasting continues until player leaves range of all speakers
+    });
+    
+    // Listen for server-initiated broadcast start/stop
+    useNuiEvent("music:startAutoBroadcast", async (eventData: any) => {
+        // The useNuiEvent hook passes event.data, which for this message is:
+        // { type: 'music:startAutoBroadcast', data: { instanceId, streamId } }
+        // So we need to extract the nested data field
+        const data = eventData.data || eventData;
+        console.log("MusicController: Received music:startAutoBroadcast", { eventData, data, isBroadcasting, currentStreamId: streamIdRef.current });
+        
+        // Validate that we have both instanceId and streamId
+        if (!data || !data.instanceId || !data.streamId) {
+            console.error("MusicController: Invalid startAutoBroadcast data - missing instanceId or streamId", data);
+            return;
+        }
+        
+        // If already broadcasting with the same streamId, don't do anything
+        // The server already knows we're broadcasting, no need to re-announce (which would reset connections)
+        if (isBroadcasting && streamIdRef.current === data.streamId) {
+            console.log("MusicController: Already broadcasting with same streamId, skipping (server already knows)");
+            return;
+        }
+        // Wait for audio context to be ready (retry if needed)
+        let retries = 0;
+        const maxRetries = 10;
+        while (retries < maxRetries) {
+            const ctx = audioCtxRef.current;
+            const streamNode = streamDestRef.current;
+            if (ctx && streamNode) {
+                try {
+                    // Resume audio context if suspended
+                    if (ctx.state === 'suspended') {
+                        await ctx.resume();
+                    }
+                    
+                    // Set the streamId ref
+                    streamIdRef.current = data.streamId;
+                    
+                    // Get the audio track
+                    const stream = streamNode.stream;
+                    const audioTracks = stream.getAudioTracks();
+                    outboundTrackRef.current = (audioTracks && audioTracks[0]) ? audioTracks[0] : null;
+
+                    // Announce broadcast to server
+                    // Ensure instanceId is a number (not string)
+                    const instanceIdNum = typeof data.instanceId === 'string' ? parseInt(data.instanceId, 10) : data.instanceId;
+                    console.log("MusicController: Sending announceBroadcast", { instanceId: instanceIdNum, streamId: data.streamId });
+                    await nuiPost("music_rtc_announce_broadcast", { 
+                        instanceId: instanceIdNum,
+                        streamId: data.streamId 
+                    });
+                    
+                    console.log("MusicController: auto-broadcast started", { 
+                        streamId: data.streamId, 
+                        instanceId: data.instanceId, 
+                        hasTrack: !!outboundTrackRef.current,
+                        ctxState: ctx.state
+                    });
+                    
+                    setIsBroadcasting(true);
+                    try {
+                        (window as any).__musicBroadcastStreamId = data.streamId;
+                        (window as any).__musicIsBroadcaster = true;
+                    } catch {}
+                    return; // Success, exit retry loop
+                } catch (error) {
+                    console.error("MusicController: Error starting broadcast", error);
+                }
+            }
+            
+            // Wait a bit before retrying
+            await new Promise(resolve => setTimeout(resolve, 100));
+            retries++;
+        }
+        
+        console.error("MusicController: Failed to start broadcast - audio context not ready after retries");
+    });
+    
+    useNuiEvent("music:stopAutoBroadcast", async (event: any) => {
+        console.log("MusicController: Received music:stopAutoBroadcast", event);
+        if (isBroadcasting) {
+            await stopBroadcast();
+        } else {
+            // Even if not broadcasting, reset controller state
+            resetController();
+        }
     });
 
     // Receive initial light controls state
@@ -1708,10 +1864,14 @@ export default function MusicController() {
                     if (deck === "controls") {
                         return (
                             <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", justifyContent: "center"  }}>
-                                <div className="mixerRow h-[220px]" style={{ gap: 24, justifyContent: "center" }}>
-                                    <div className="vGroup">
+                                <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
+                                    <div className="vGroup h-full">
                                         <RangeControl
                                             orientation="vertical"
+                                            barStyle={{
+                                                left: "-96.5px",
+                                                width: "193px",
+                                            }}
                                             label="Right"
                                             valueText={"Left"}
                                             min={0}
@@ -1730,9 +1890,18 @@ export default function MusicController() {
                                             ↺
                                         </button>
                                     </div>
-                                    <div className="vGroup">
+                                    <div className="vGroup h-full">
                                         <RangeControl
                                             orientation="vertical"
+                                            barStyle={{
+                                                left: "-101px",
+                                                width: "193px",
+                                            }}
+                                            vuMeterStyle={{
+                                                top: "13px",
+                                                height: "195px",
+                                                transform: "none",
+                                            }}
                                             min={0}
                                             max={100}
                                             step={1}
@@ -1753,22 +1922,12 @@ export default function MusicController() {
                                             ↺
                                         </button>
                                     </div>
-                                    <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+                                    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                                         <MasterLightControls stationId={currentStationId} />
                                         <LightControls lightType="ambient" label="Ambient" stationId={currentStationId} />
                                         <LightControls lightType="spotlight" label="Spotlight" stationId={currentStationId} />
                                         <LightControls lightType="barlight" label="Bar Light" stationId={currentStationId} />
                                     </div>
-                                </div>
-                                <div className="mixerRow w-full" style={{ gap: 12, justifyContent: "center" }}>
-                                    <button
-                                        className="bg-secondary px-4 w-full py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80"
-                                        onClick={isBroadcasting ? stopBroadcast : startBroadcast}
-                                        aria-label="Start broadcasting mix to clients"
-                                        title="Start broadcasting mix to clients"
-                                    >
-                                        {isBroadcasting ? "Stop Broadcasting" : "Start Broadcasting"}
-                                    </button>
                                 </div>
                                  <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
                                     <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6, width: "100%" }}>

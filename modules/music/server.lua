@@ -1,5 +1,10 @@
 local MusicInstances = {}
 
+-- Export function to get music instances (for other resources)
+exports('GetMusicInstances', function()
+    return MusicInstances
+end)
+
 function CreateMusicInstance(name, coords, heading, speakers)
 	local instance = {
 		name = name,
@@ -124,9 +129,11 @@ RegisterNetEvent('music:rtc:announceBroadcast', function(data, datalen)
 		local ok, parsed = pcall(function() return json.decode(data or "{}") end)
 		if ok and type(parsed) == "table" then payload = parsed end
 	end
+	print("[music] announceBroadcast payload:", json.encode(payload))
 	local instanceId = tonumber(payload.instanceId or -1)
 	if instanceId == nil or MusicInstances[instanceId] == nil then
-		print("[music] announceBroadcast invalid instanceId", payload.instanceId)
+		print("[music] announceBroadcast invalid instanceId", payload.instanceId, "type:", type(payload.instanceId))
+		print("[music] Available instances:", json.encode(MusicInstances))
 		return
 	end
 	local inst = MusicInstances[instanceId]
@@ -135,7 +142,8 @@ RegisterNetEvent('music:rtc:announceBroadcast', function(data, datalen)
 		print(("[music] instance %s already broadcasting by %s; reject %s"):format(instanceId, inst.broadcaster, src))
 		return
 	end
-	local streamId = payload.streamId or tostring(src) .. "_" .. tostring(math.random(100000, 999999))
+	-- Use provided streamId (from auto-broadcast) or use existing one, or generate one
+	local streamId = payload.streamId or inst.streamId or tostring(src) .. "_" .. tostring(math.random(100000, 999999))
 	inst.broadcaster = src
 	inst.streamId = streamId
 	print(("[music] instance %s broadcast announced by %s streamId=%s"):format(instanceId, src, streamId))

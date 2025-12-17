@@ -31,6 +31,7 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
         rotateHorizontal: true,
         rotateVertical: false,
         flash: "low",
+        speed: "normal",
     });
 
     // Listen for initial state from server - use ambient as reference (master sets all to same)
@@ -55,11 +56,17 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
             const rotateHorizontal = lightControl.rotateHorizontal === true || lightControl.rotateHorizontal === 1 || lightControl.rotateHorizontal === "true";
             const rotateVertical = lightControl.rotateVertical === true || lightControl.rotateVertical === 1 || lightControl.rotateVertical === "true";
             
+            // Speed value is already converted to string by client
+            const speedValue = (lightControl.speed === "slow" || lightControl.speed === "normal" || lightControl.speed === "fast") 
+                ? lightControl.speed as SpeedSetting 
+                : "normal";
+            
             setState({
                 enabled: enabled,
                 rotateHorizontal: rotateHorizontal,
                 rotateVertical: rotateVertical,
                 flash: flashValue,
+                speed: speedValue,
             });
         }
     });
@@ -81,11 +88,16 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                 setState(prev => ({ ...prev, [data.property]: boolValue }));
             } else if (data.property === "flash") {
                 setState(prev => ({ ...prev, flash: data.value as FlashSetting }));
+            } else if (data.property === "speed") {
+                if (data.value === "slow" || data.value === "normal" || data.value === "fast") {
+                    setState(prev => ({ ...prev, speed: data.value as SpeedSetting }));
+                }
             }
         }
     });
 
-    const updateAllLights = async (property: keyof LightControlState, value: boolean | FlashSetting) => {
+
+    const updateAllLights = async (property: keyof LightControlState, value: boolean | FlashSetting | SpeedSetting) => {
         if (!stationId) return;
         
         // Send single update event for all lights
@@ -103,8 +115,15 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
         updateAllLights("flash", nextFlash);
     };
 
+    const cycleSpeed = () => {
+        const nextSpeed: SpeedSetting = 
+            state.speed === "slow" ? "normal" :
+            state.speed === "normal" ? "fast" : "slow";
+        updateAllLights("speed", nextSpeed);
+    };
+
     return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", minWidth: 80 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: "#ddd", marginBottom: 4 }}>
                 All Lights
             </div>
@@ -297,6 +316,84 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                 )}
                 <span style={{ fontSize: 8, color: state.flash === "off" ? "#888" : state.flash === "low" ? "#c8a43b" : "#d64545", textTransform: "uppercase", fontWeight: 600 }}>
                     {state.flash}
+                </span>
+            </button>
+
+            {/* Speed Control (3-state: slow, normal, fast) */}
+            <button
+                onClick={cycleSpeed}
+                style={{
+                    width: 48,
+                    height: 48,
+                    border: `2px solid ${
+                        state.speed === "slow" ? "#4a9eff" :
+                        state.speed === "normal" ? "#60d394" : "#ff6b6b"
+                    }`,
+                    borderRadius: 6,
+                    background: state.speed === "slow" ? "rgba(74, 158, 255, 0.1)" :
+                        state.speed === "normal" ? "rgba(96, 211, 148, 0.1)" : "rgba(255, 107, 107, 0.1)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    transition: "all 120ms ease",
+                    flexDirection: "column",
+                    gap: 2,
+                }}
+                title={`Speed (All): ${state.speed}`}
+                aria-label={`Light rotation speed for all lights: ${state.speed}`}
+            >
+                {state.speed === "slow" ? (
+                    <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="#4a9eff"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                    >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l4 2" />
+                    </svg>
+                ) : state.speed === "normal" ? (
+                    <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="#60d394"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                    >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l4 2" />
+                    </svg>
+                ) : (
+                    <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="#ff6b6b"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                    >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l4 2" />
+                        <path d="M16 12h2" strokeWidth="2.5" />
+                    </svg>
+                )}
+                <span style={{ 
+                    fontSize: 8, 
+                    color: state.speed === "slow" ? "#4a9eff" : state.speed === "normal" ? "#60d394" : "#ff6b6b", 
+                    textTransform: "uppercase", 
+                    fontWeight: 600 
+                }}>
+                    {state.speed}
                 </span>
             </button>
         </div>

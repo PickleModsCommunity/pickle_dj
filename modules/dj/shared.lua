@@ -18,3 +18,24 @@ function GetFlashString(value)
     end
     return "off" -- default
 end
+
+function GetSpeedValue(value)
+    if value == "slow" then
+        return 0.5
+    elseif value == "normal" then
+        return 2.0
+    elseif value == "fast" then
+        return 5.0
+    end
+    return 2.0 -- default to normal
+end
+
+function GetSpeedString(value)
+    if value <= 1.0 then
+        return "slow"
+    elseif value <= 3.5 then
+        return "normal"
+    else
+        return "fast"
+    end
+end
