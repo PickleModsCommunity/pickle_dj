@@ -31,62 +31,6 @@ function UnregisterDJStation(id)
     LocalDJStations[id] = nil
 end
 
-local ind = 0
-local tmodels = {
-    `ba_rig_dj_01_lights_04_a`,
-    `ba_rig_dj_01_lights_04_b`,
-    `ba_rig_dj_01_lights_04_c`,
-    `ba_rig_dj_02_lights_04_a`,
-    `ba_rig_dj_02_lights_04_b`,
-    `ba_rig_dj_02_lights_04_c`,
-    `ba_rig_dj_03_lights_04_a`,
-    `ba_rig_dj_03_lights_04_b`,
-    `ba_rig_dj_03_lights_04_c`,
-    `ba_rig_dj_04_lights_04_a`,
-    `ba_rig_dj_04_lights_04_b`,
-    `ba_rig_dj_04_lights_04_c`,
-}
-local lampModels = {
-    `stg_blinder`,
-    `stg_strobe_blinder`,
-    `stg_spot_sharpy`,
-    `stg_strobe_hdgh`,
-    `stg_rays_bar12_spr`,
-    `stg_rays_strobe12_spr_t2`,
-}
-local sndInd = 0
-
-function CreateVFX(id)
-    local vfx = {
-        lightProp = nil,
-        visualProp = nil,
-    }
-    local currentTheme = Config.LightingThemes["Rainbow"]
-    sndInd = sndInd + 1
-    if sndInd > #currentTheme then
-        sndInd = 1
-    end
-    local color = currentTheme[sndInd]
-    local station = DJStations[id]
-    if not station then return end
-    local localStation = LocalDJStations[id]
-    local dir = GetEntityForwardVector(localStation.entity)
-    local newCoords = vector3(station.coords.x + (dir.x * 2), station.coords.y + (dir.y * 2), station.coords.z + 1.0)
-    -- vfx.lightProp = CreateProp(`prop_tennis_ball`, newCoords.x, newCoords.y, newCoords.z + (ind * 0.15), false, true, false)
-    -- vfx.visualProp = CreateProp(tmodels[ind + 1], newCoords.x, newCoords.y, newCoords.z - 1.0, false, true, false)
-    -- local pos = vector3(-3.0, 0.0, -3.385)
-    -- local rot = vector3(0.0, 0.0, 0.0)
-    -- AttachEntityToEntity(vfx.visualProp, vfx.lightProp, 0, pos.x, pos.y, pos.z, rot.x, rot.y, rot.z, false, true, false, true, 2, true)
-    -- FreezeEntityPosition(vfx.lightProp, true)
-    -- SetEntityRotation(vfx.lightProp, 0.0, 0.0, GetEntityHeading(localStation.entity), 2, true)
-    vfx.lampProp = CreateProp(lampModels[ind + 1], newCoords.x + ((-dir.x * 5) * ind), newCoords.y + ((dir.y * 5) * ind), newCoords.z + 1.0 + (ind * 0.15), false, true, false)
-    SetObjectLightColor(vfx.lampProp, 1, color.r, color.g, color.b)
-    SetEntityRotation(vfx.lampProp, 0.0, 0.0, GetEntityHeading(localStation.entity) + 180.0, 2, true)
-    FreezeEntityPosition(vfx.lampProp, true)
-    ind = ind + 1
-    return vfx
-end
-
 function RegisterDJStation(id)
     if LocalDJStations[id] then UnregisterDJStation(id) end
 	local station = DJStations[id]
@@ -168,15 +112,35 @@ function RegisterDJStation(id)
     -- Spawn configured lights for this station
     if station.lights and type(station.lights) == "table" then
         for _, light in ipairs(station.lights) do
-            local model = light.model or `stg_blinder`
+            local spec = (Config.LightTypes and light.data.lightType and Config.LightTypes[light.data.lightType]) or nil
+            local model = (spec and spec.model) or (light.model or `stg_blinder`)
             local ent = CreateProp(model, light.coords.x, light.coords.y, light.coords.z, false, true, false)
-            SetEntityRotation(ent, 0.0, 0.0, light.heading, 2, true)
+            SetEntityCoordsNoOffset(ent, light.coords.x, light.coords.y, light.coords.z, 0.0, 0.0, 0.0)
+            local rot = spec and spec.rotation or vector3(0.0, 0.0, 0.0)
+            SetEntityRotation(ent, rot.x, rot.y, light.heading + rot.z, 2, true)
             FreezeEntityPosition(ent, true)
+            local theme = {
+                lights = {
+                    ambient = {
+                        color = {255, 0, 0},
+                    },
+                    spotlight = {
+                        color = {0, 255, 0},
+                    },
+                    barlight = {
+                        color = {0, 0, 255},
+                    }
+                }
+            }
             table.insert(LocalDJStations[id].entityData.lights, {
                 entity = ent,
+                lightType = light.data.lightType,
+                heading = light.heading + rot.z,
                 dbId = light.id,
+                color = theme.lights[light.data.lightType].color,
                 data = light
             })
+            SetObjectLightColor(ent, 1, theme.lights[light.data.lightType].color[1], theme.lights[light.data.lightType].color[2], theme.lights[light.data.lightType].color[3])
         end
     end
     -- Keep old VFX system for backwards compatibility (auto-generated lights)
@@ -184,6 +148,94 @@ function RegisterDJStation(id)
     -- Only create auto VFX if no lights are defined in station
     return station
 end
+
+CreateThread(function()
+    local speed = 2
+    local maxRot = 90.0
+    local maxHz = 45.0
+    local rot = 0.0
+    local dir = 1
+    local hDir = 1
+    -- Simulated Controls
+    local controls = {
+        lights = {
+            ambient = {
+                rotateHorizontal = true,
+                rotateVertical = false,
+                flash = 2,
+            },
+            spotlight = {
+                rotateHorizontal = true,
+                rotateVertical = false, 
+                flash = 0,
+            },
+            barlight = {
+                rotateHorizontal = true,
+                rotateVertical = true,
+                flash = 2,
+            }
+        }
+    }
+    local visibleLights = {}
+    for lightType, lightControls in pairs(controls.lights) do
+        visibleLights[lightType] = true
+    end
+    local ticks = 0
+    while true do
+        ticks = ticks + 1
+        local updateLightColor = {}
+        if dir == 1 and rot >= maxRot then
+            dir = -1
+            hDir = -hDir
+        elseif dir == -1 and rot < 0.0 then
+            dir = 1
+        end
+        rot = rot + speed * dir
+        for lightType, lightControls in pairs(controls.lights) do
+            if lightControls.flash > 0 and ticks % lightControls.flash == 0 then
+                updateLightColor[lightType] = true
+                visibleLights[lightType] = not visibleLights[lightType]
+                print(lightType, visibleLights[lightType])
+            end
+        end
+        for id, station in pairs(LocalDJStations) do
+            for i=1, #station.entityData.lights do
+                local light = station.entityData.lights[i]
+                local tilt = 0.0
+                local locHz = 0.0
+                local locRot = 0.0
+                local lightControls = controls.lights[light.lightType]
+                if light.lightType == "spotlight" then
+                    tilt = -20.0
+                end
+                if lightControls.rotateHorizontal then
+                    local hz = (rot / maxRot) * maxHz
+                    if hDir == 1 then
+                        locHz = hz - maxHz
+                    else
+                        locHz = maxHz - hz
+                    end
+                end
+                if lightControls.rotateVertical then
+                    locRot = rot
+                end
+                if updateLightColor[light.lightType] then
+                    if Config.LaggyButCoolLights then
+                        if not visibleLights[light.lightType] then
+                            SetObjectLightColor(light.entity, 1, 0, 0, 0)
+                        else
+                            SetObjectLightColor(light.entity, 1, light.color[1], light.color[2], light.color[3])
+                        end
+                    else
+                        SetEntityVisible(light.entity, visibleLights[light.lightType], false)
+                    end
+                end
+                SetEntityRotation(light.entity, locRot + tilt, 0.0, (light.heading) + (locHz), 2, true)
+            end
+        end
+        Wait(0)
+    end
+end)
 
 RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
     if type(id) == 'table' then
@@ -430,7 +482,12 @@ function OpenEntityTypeMenu(stationId)
             description = "Place a " .. entityInfo.label:lower(),
             icon = entityInfo.icon,
             onSelect = function()
-                StartEntityPlacement(stationId, entityType)
+                -- Show variant selection for speakers and lights
+                if entityType == "speaker" or entityType == "light" then
+                    OpenEntityVariantMenu(stationId, entityType)
+                else
+                    StartEntityPlacement(stationId, entityType, nil)
+                end
             end
         })
     end
@@ -444,8 +501,56 @@ function OpenEntityTypeMenu(stationId)
     lib.showContext('dj_entity_type_' .. stationId)
 end
 
+-- Open variant selection menu for speakers or lights
+function OpenEntityVariantMenu(stationId, entityType)
+    local options = {}
+    local configTable = nil
+    local title = ""
+    
+    if entityType == "speaker" then
+        configTable = Config.SpeakerProps
+        title = "Select Speaker Type"
+    elseif entityType == "light" then
+        configTable = Config.LightTypes
+        title = "Select Light Type"
+    end
+    
+    if not configTable then
+        ShowNotification("No variants available for this entity type", "error")
+        return
+    end
+    
+    -- Build options from config
+    for variantKey, variantData in pairs(configTable) do
+        local label = variantData.label or variantKey
+        local description = "Place a " .. label:lower()
+        
+        table.insert(options, {
+            title = label,
+            description = description,
+            icon = entityType == "speaker" and "volume-high" or "lightbulb",
+            onSelect = function()
+                StartEntityPlacement(stationId, entityType, variantKey)
+            end
+        })
+    end
+    
+    if #options == 0 then
+        ShowNotification("No variants configured for this entity type", "error")
+        return
+    end
+    
+    lib.registerContext({
+        id = 'dj_entity_variant_' .. stationId .. '_' .. entityType,
+        title = title,
+        menu = 'dj_entity_type_' .. stationId,
+        options = options
+    })
+    lib.showContext('dj_entity_variant_' .. stationId .. '_' .. entityType)
+end
+
 -- Start entity placement
-function StartEntityPlacement(stationId, entityType)
+function StartEntityPlacement(stationId, entityType, variantKey)
     if isPlacingEntity then
         ShowNotification("You are already placing an entity", "error")
         return
@@ -457,11 +562,43 @@ function StartEntityPlacement(stationId, entityType)
     local station = DJStations[stationId]
     if not station then return end
     
-    -- Get model
+    -- Get model and variant data based on entity type
     local model = entityInfo.defaultModel
-    if entityType == "speaker" and entityInfo.configKey and Config.SpeakerProps and Config.SpeakerProps[entityInfo.configKey] then
-        model = Config.SpeakerProps[entityInfo.configKey].model
+    local variantData = nil
+    local variantLabel = entityInfo.label
+    
+    if entityType == "speaker" then
+        if variantKey and Config.SpeakerProps and Config.SpeakerProps[variantKey] then
+            variantData = Config.SpeakerProps[variantKey]
+            model = variantData.model
+            variantLabel = variantData.label or variantKey
+        elseif Config.SpeakerProps then
+            -- If no variant selected but config exists, use first one
+            for key, data in pairs(Config.SpeakerProps) do
+                variantData = data
+                model = data.model
+                variantKey = key
+                variantLabel = data.label or key
+                break
+            end
+        end
+    elseif entityType == "light" then
+        if variantKey and Config.LightTypes and Config.LightTypes[variantKey] then
+            variantData = Config.LightTypes[variantKey]
+            model = variantData.model
+            variantLabel = variantData.label or variantKey
+        elseif Config.LightTypes then
+            -- If no variant selected but config exists, use first one
+            for key, data in pairs(Config.LightTypes) do
+                variantData = data
+                model = data.model
+                variantKey = key
+                variantLabel = data.label or key
+                break
+            end
+        end
     end
+    
     -- Start gizmo editor
     local result = StartGizmoEditor({
         model = model,
@@ -471,6 +608,7 @@ function StartEntityPlacement(stationId, entityType)
         enableCancel = true,
         deleteEntity = true
     })
+    
     if result and result.position then
         -- Prepare entity data
         local entityData = {
@@ -480,21 +618,27 @@ function StartEntityPlacement(stationId, entityType)
         }
         
         -- Add entity-specific data
-        if entityType == "speaker" and entityInfo.configKey and Config.SpeakerProps and Config.SpeakerProps[entityInfo.configKey] then
-            local spec = Config.SpeakerProps[entityInfo.configKey]
+        if entityType == "speaker" and variantData then
             entityData.data = {
-                speakerType = entityInfo.configKey,
-                rotation = spec.rotation,
-                soundOffset = spec.soundOffset
+                speakerType = variantKey,
+                rotation = variantData.rotation or vector3(0.0, 0.0, 0.0),
+                soundOffset = variantData.soundOffset or vector3(0.0, 0.0, 0.0),
+                soundRadius = variantData.soundRadius
+            }
+        elseif entityType == "light" and variantData then
+            entityData.data = {
+                lightType = variantKey,
+                strobeModel = variantData.strobeModel
             }
         end
         
         -- Send to server
         TriggerServerEvent('pickle_dj:addEntity', stationId, entityType, entityData)
-        ShowNotification(entityInfo.label .. " placed successfully!", "success")
+        ShowNotification(variantLabel .. " placed successfully!", "success")
     else
         ShowNotification("Entity placement cancelled", "error")
     end
+    OpenEntityTypeMenu(stationId)
 end
 
 -- Toggle entity viewing
@@ -510,58 +654,6 @@ function ToggleEntityViewing(stationId)
     end
 end
 
--- Entity viewing thread
-CreateThread(function()
-    while true do
-        Wait(0)
-        if viewingEntities and viewingStationId then
-            local localStation = LocalDJStations[viewingStationId]
-            if not localStation or not localStation.entityData then
-                viewingEntities = false
-                viewingStationId = nil
-            else
-                local playerCoords = GetEntityCoords(PlayerPedId())
-                
-                -- Draw speakers
-                for _, speakerData in ipairs(localStation.entityData.speakers or {}) do
-                    if speakerData.entity and DoesEntityExist(speakerData.entity) then
-                        local entCoords = GetEntityCoords(speakerData.entity)
-                        local dist = #(playerCoords - entCoords)
-                        if dist < 10.0 then
-                            DrawText3D(entCoords.x, entCoords.y, entCoords.z + 0.5, "Speaker #" .. (speakerData.dbId or "?") .. "\n[E] Remove")
-                            
-                            if dist < 2.0 and IsControlJustPressed(0, 38) then -- E key
-                                if speakerData.dbId then
-                                    TriggerServerEvent('pickle_dj:removeEntity', speakerData.dbId)
-                                end
-                            end
-                        end
-                    end
-                end
-                
-                -- Draw lights
-                for _, lightData in ipairs(localStation.entityData.lights or {}) do
-                    if lightData.entity and DoesEntityExist(lightData.entity) then
-                        local entCoords = GetEntityCoords(lightData.entity)
-                        local dist = #(playerCoords - entCoords)
-                        if dist < 10.0 then
-                            DrawText3D(entCoords.x, entCoords.y, entCoords.z + 0.5, "Light #" .. (lightData.dbId or "?") .. "\n[E] Remove")
-                            
-                            if dist < 2.0 and IsControlJustPressed(0, 38) then -- E key
-                                if lightData.dbId then
-                                    TriggerServerEvent('pickle_dj:removeEntity', lightData.dbId)
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        else
-            Wait(500)
-        end
-    end
-end)
-
 -- Open entity removal menu
 function OpenEntityRemoveMenu(stationId)
     local localStation = LocalDJStations[stationId]
@@ -574,8 +666,12 @@ function OpenEntityRemoveMenu(stationId)
     
     -- Add speakers
     for i, speakerData in ipairs(localStation.entityData.speakers or {}) do
+        local variantLabel = "Speaker"
+        if speakerData.data and speakerData.data.speakerType and Config.SpeakerProps and Config.SpeakerProps[speakerData.data.speakerType] then
+            variantLabel = Config.SpeakerProps[speakerData.data.speakerType].label or speakerData.data.speakerType
+        end
         table.insert(options, {
-            title = "Speaker #" .. (speakerData.dbId or i),
+            title = variantLabel .. " #" .. (speakerData.dbId or i),
             description = "Remove this speaker",
             icon = "volume-high",
             onSelect = function()
@@ -584,14 +680,21 @@ function OpenEntityRemoveMenu(stationId)
                 else
                     ShowNotification("Entity ID not found", "error")
                 end
+                SetTimeout(100, function()
+                    OpenEntityRemoveMenu(stationId)
+                end)
             end
         })
     end
     
     -- Add lights
     for i, lightData in ipairs(localStation.entityData.lights or {}) do
+        local variantLabel = "Light"
+        if Config.LightTypes and Config.LightTypes[lightData.lightType] then
+            variantLabel = Config.LightTypes[lightData.lightType].label or lightData.lightType
+        end
         table.insert(options, {
-            title = "Light #" .. (lightData.dbId or i),
+            title = variantLabel .. " #" .. (lightData.dbId or i),
             description = "Remove this light",
             icon = "lightbulb",
             onSelect = function()
@@ -600,6 +703,9 @@ function OpenEntityRemoveMenu(stationId)
                 else
                     ShowNotification("Entity ID not found", "error")
                 end
+                SetTimeout(500, function()
+                    OpenEntityRemoveMenu(stationId)
+                end)
             end
         })
     end
