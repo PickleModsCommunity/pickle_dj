@@ -1,6 +1,40 @@
 local DJStations = {}
 local StationDBMapping = {} -- Maps game ID to database ID
 
+-- Per-station light controls (in-memory only, not saved to database)
+-- flash: 0 = off, 1 = high (every tick), 2 = low (every 2 ticks)
+local StationLightControls = {}
+
+-- Initialize default controls for a station if they don't exist
+
+local function getStationLightControls(stationId)
+    if not StationLightControls[stationId] then
+        StationLightControls[stationId] = {
+            lights = {
+                ambient = {
+                    enabled = true,
+                    rotateHorizontal = true,
+                    rotateVertical = false,
+                    flash = GetFlashValue("low"), -- low
+                },
+                spotlight = {
+                    enabled = true,
+                    rotateHorizontal = true,
+                    rotateVertical = false, 
+                    flash = GetFlashValue("off"), -- off
+                },
+                barlight = {
+                    enabled = true,
+                    rotateHorizontal = true,
+                    rotateVertical = true,
+                    flash = GetFlashValue("low"), -- low
+                }
+            }
+        }
+    end
+    return StationLightControls[stationId]
+end
+
 -- Create database tables on resource start
 CreateThread(function()
     MySQL.ready(function()
@@ -56,6 +90,9 @@ function RegisterDJStation(station, skipSync)
     }
     if skipSync then return id end
     TriggerClientEvent('pickle_dj:registerDJStation', -1, id, station)
+    -- Send current light controls state for this station
+    local controls = getStationLightControls(id)
+    TriggerClientEvent('pickle_dj:lightControlsState', -1, id, controls)
     return id
 end
 
@@ -133,12 +170,22 @@ CreateThread(function()
         -- Load from database first
         LoadDJStationsFromDatabase()
         TriggerClientEvent('pickle_dj:registerDJStation', -1, DJStations)
+        -- Send light controls state for all stations
+        for gameId, _ in pairs(DJStations) do
+            local controls = getStationLightControls(gameId)
+            TriggerClientEvent('pickle_dj:lightControlsState', -1, gameId, controls)
+        end
     end)
 end)
 
 RegisterServerEvent('pickle_dj:requestDJStations', function()
     local source = source
     TriggerClientEvent('pickle_dj:registerDJStation', source, DJStations)
+    -- Send light controls state for all stations to requesting client
+    for gameId, _ in pairs(DJStations) do
+        local controls = getStationLightControls(gameId)
+        TriggerClientEvent('pickle_dj:lightControlsState', source, gameId, controls)
+    end
 end)
 
 -- Admin permission check callback
@@ -452,4 +499,81 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
             end
         end)
     end)
+end)
+
+-- Request light controls state for a station (kept for backwards compatibility, but not needed)
+RegisterNetEvent('pickle_dj:requestLightControls', function(stationId)
+    local source = source
+    local controls = getStationLightControls(stationId)
+    -- Send current state to requesting client
+    TriggerClientEvent('pickle_dj:lightControlsState', source, stationId, controls)
+end)
+
+-- Update light controls for a station (networked to all clients)
+RegisterNetEvent('pickle_dj:updateLightControls', function(stationId, lightType, property, value)
+    local source = source
+    local controls = getStationLightControls(stationId)
+    
+    if not controls or not controls.lights or not controls.lights[lightType] then
+        return
+    end
+    
+    -- Update the control value
+    local numericValue = value
+    if property == "enabled" then
+        controls.lights[lightType].enabled = value == true
+        numericValue = value == true
+    elseif property == "rotateHorizontal" or property == "rotateVertical" then
+        controls.lights[lightType][property] = value == true
+        numericValue = value == true
+    elseif property == "flash" then
+        -- Use shared function to convert string to number
+        numericValue = GetFlashValue(value)
+        if numericValue then
+            controls.lights[lightType].flash = numericValue
+        end
+    end
+    
+    -- Network the update to all clients with the numeric value from server
+    TriggerClientEvent('pickle_dj:lightControlsUpdated', -1, stationId, lightType, property, numericValue)
+end)
+
+-- Update all light controls for a station (networked to all clients)
+RegisterNetEvent('pickle_dj:updateAllLightControls', function(stationId, property, value)
+    local source = source
+    local controls = getStationLightControls(stationId)
+    
+    if not controls or not controls.lights then
+        return
+    end
+    
+    -- Update all light types with the same value
+    local numericValue = value
+    local lightTypes = { "ambient", "spotlight", "barlight" }
+    
+    for _, lightType in ipairs(lightTypes) do
+        if not controls.lights[lightType] then
+            goto continue_light
+        end
+        
+        -- Update the control value
+        if property == "enabled" then
+            controls.lights[lightType].enabled = value == true
+            numericValue = value == true
+        elseif property == "rotateHorizontal" or property == "rotateVertical" then
+            controls.lights[lightType][property] = value == true
+            numericValue = value == true
+        elseif property == "flash" then
+            -- Use shared function to convert string to number
+            numericValue = GetFlashValue(value)
+            if numericValue then
+                controls.lights[lightType].flash = numericValue
+            end
+        end
+        
+        -- Network the update to all clients with the numeric value from server
+        TriggerClientEvent('pickle_dj:lightControlsUpdated', -1, stationId, lightType, property, numericValue)
+        
+        ::continue_light::
+    end
 end)

@@ -3,6 +3,8 @@ import { useNuiEvent } from "../../providers/nui/useNui";
 import RangeControl, { VuMeter } from "./RangeControl";
 import { Mic, MicOff, Plus } from "lucide-react";
 import { fetchNui } from "@/providers/nui/fetchNui";
+import LightControls from "./LightControls";
+import MasterLightControls from "./MasterLightControls";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -65,6 +67,7 @@ export default function MusicController() {
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
     const [visible, setVisible] = useState(false);
+    const [currentStationId, setCurrentStationId] = useState<number | null>(null);
     // VU meters (0..1 normalized)
     const [vuLevels, setVuLevels] = useState<Record<string, number>>({ track_1: 0, track_2: 0, mic: 0 });
     const [masterVu, setMasterVu] = useState<number>(0);
@@ -1166,6 +1169,17 @@ export default function MusicController() {
 
     useNuiEvent("music:setControllerVisible", (data: any) => {
         setVisible(data.visible);
+        if (data.stationId) {
+            setCurrentStationId(data.stationId);
+        }
+    });
+
+    // Receive initial light controls state
+    useNuiEvent("music:lightControlsState", (data: any) => {
+        if (data.stationId && data.controls) {
+            // Store initial state - will be used by LightControls components
+            // The components will receive this via props or context
+        }
     });
 
     // Horizontal VU meter (mic-only) using same segment style as vertical
@@ -1738,6 +1752,12 @@ export default function MusicController() {
                                         >
                                             ↺
                                         </button>
+                                    </div>
+                                    <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+                                        <MasterLightControls stationId={currentStationId} />
+                                        <LightControls lightType="ambient" label="Ambient" stationId={currentStationId} />
+                                        <LightControls lightType="spotlight" label="Spotlight" stationId={currentStationId} />
+                                        <LightControls lightType="barlight" label="Bar Light" stationId={currentStationId} />
                                     </div>
                                 </div>
                                 <div className="mixerRow w-full" style={{ gap: 12, justifyContent: "center" }}>

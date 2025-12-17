@@ -1,5 +1,30 @@
 local DJStations = {}
 local LocalDJStations = {}
+local stationControls = {}
+local DJ_CAMERA = nil
+
+function CreateDJCamera()
+    local initialCamSettings = {
+        coords = GetGameplayCamCoord(),
+        rotation = GetGameplayCamRot(),
+        fov = GetGameplayCamFov(),
+    }
+    DJ_CAMERA = CreateCamWithParams("DEFAULT_SCRIPTED_CAMERA", 
+        initialCamSettings.coords.x, initialCamSettings.coords.y, initialCamSettings.coords.z, 
+        initialCamSettings.rotation.x, initialCamSettings.rotation.y, initialCamSettings.rotation.z, initialCamSettings.fov
+    )
+    SetCamActive(DJ_CAMERA, true)
+    RenderScriptCams(true, false, 0, true, true)
+end
+
+function ExitDJCamera(durationValue)
+    local duration = durationValue
+    if duration == nil then duration = 2000 end
+    ClearFocus()
+	DestroyAllCams()
+    RenderScriptCams(false, true, duration, true, false) 
+end
+
 function UnregisterDJStation(id)
     if LocalDJStations[id] then
         DeleteScriptObject(LocalDJStations[id].entity)
@@ -52,10 +77,21 @@ function RegisterDJStation(id)
                         onSelect = function()
                             SetMusicController(station.streamId)
                             CreateThread(function()
+                                local coords = GetEntityCoords(LocalDJStations[id].entity) + vector3(0.0, 0.0, 2.0)
+                                coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * -1.0
                                 SetNuiFocus(true, true)
+                                CreateDJCamera()
+                                SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z,
+                                    -30.0, 0.0, station.heading + 0.0, 90.0, 
+                                    2000, 0, 0, 2
+                                )
+                                -- Request latest light controls state from server when opening controller
+                                -- This ensures we always have the correct state, even if client state is stale
+                                TriggerServerEvent('pickle_dj:requestLightControls', id)
                                 SendNUIMessage({
                                     type = 'music:setControllerVisible',
-                                    visible = true
+                                    visible = true,
+                                    stationId = id
                                 })
                             end)
                         end
@@ -149,6 +185,11 @@ function RegisterDJStation(id)
     return station
 end
 
+-- Per-station light controls (stationId -> controls)
+-- flash: 0 = off, 1 = high (every tick), 2 = low (every 2 ticks)
+-- Controls are ONLY set from server, never initialized locally
+local stationControls = {}
+
 CreateThread(function()
     local speed = 2
     local maxRot = 90.0
@@ -156,30 +197,8 @@ CreateThread(function()
     local rot = 0.0
     local dir = 1
     local hDir = 1
-    -- Simulated Controls
-    local controls = {
-        lights = {
-            ambient = {
-                rotateHorizontal = true,
-                rotateVertical = false,
-                flash = 2,
-            },
-            spotlight = {
-                rotateHorizontal = true,
-                rotateVertical = false, 
-                flash = 0,
-            },
-            barlight = {
-                rotateHorizontal = true,
-                rotateVertical = true,
-                flash = 2,
-            }
-        }
-    }
-    local visibleLights = {}
-    for lightType, lightControls in pairs(controls.lights) do
-        visibleLights[lightType] = true
-    end
+    local visibleLights = {} -- per station, per light type
+    local flashGroupStates = {} -- per station, per flash value -> boolean state
     local ticks = 0
     while true do
         ticks = ticks + 1
@@ -191,20 +210,96 @@ CreateThread(function()
             dir = 1
         end
         rot = rot + speed * dir
-        for lightType, lightControls in pairs(controls.lights) do
-            if lightControls.flash > 0 and ticks % lightControls.flash == 0 then
-                updateLightColor[lightType] = true
-                visibleLights[lightType] = not visibleLights[lightType]
-                print(lightType, visibleLights[lightType])
+        
+        -- Process each station's controls separately
+        for stationId, station in pairs(LocalDJStations) do
+            -- Only process if we have controls from server
+            local controls = stationControls[stationId]
+            if not controls or not controls.lights then goto continue_station end
+            
+            if not visibleLights[stationId] then
+                visibleLights[stationId] = {}
+                for lightType, lightControls in pairs(controls.lights) do
+                    visibleLights[stationId][lightType] = true
+                end
             end
-        end
-        for id, station in pairs(LocalDJStations) do
+            
+            if not flashGroupStates[stationId] then
+                flashGroupStates[stationId] = {}
+            end
+            
+            -- Group lights by flash value to ensure synchronized flashing
+            local flashGroups = {} -- flashValue -> {lightTypes}
+            for lightType, lightControls in pairs(controls.lights) do
+                if lightControls.enabled ~= false and lightControls.flash > 0 then
+                    local flashValue = lightControls.flash
+                    if not flashGroups[flashValue] then
+                        flashGroups[flashValue] = {}
+                    end
+                    table.insert(flashGroups[flashValue], lightType)
+                    -- Initialize flash group state if not set
+                    if flashGroupStates[stationId][flashValue] == nil then
+                        flashGroupStates[stationId][flashValue] = true
+                    end
+                end
+            end
+            
+            -- Check flash updates for this station - group by flash value for synchronization
+            for flashValue, lightTypes in pairs(flashGroups) do
+                if ticks % flashValue == 0 then
+                    -- Toggle the state for this flash group (all lights with same flash value)
+                    flashGroupStates[stationId][flashValue] = not flashGroupStates[stationId][flashValue]
+                    -- Apply the same state to all lights in this group
+                    if not updateLightColor[stationId] then updateLightColor[stationId] = {} end
+                    for _, lightType in ipairs(lightTypes) do
+                        local lightControls = controls.lights[lightType]
+                        if lightControls and lightControls.enabled ~= false then
+                            visibleLights[stationId][lightType] = flashGroupStates[stationId][flashValue]
+                            updateLightColor[stationId][lightType] = true
+                        end
+                    end
+                else
+                    -- Ensure all lights in this group have the same state (sync check)
+                    local groupState = flashGroupStates[stationId][flashValue]
+                    if groupState ~= nil then
+                        for _, lightType in ipairs(lightTypes) do
+                            local lightControls = controls.lights[lightType]
+                            if lightControls and lightControls.enabled ~= false then
+                                if visibleLights[stationId][lightType] ~= groupState then
+                                    if not updateLightColor[stationId] then updateLightColor[stationId] = {} end
+                                    visibleLights[stationId][lightType] = groupState
+                                    updateLightColor[stationId][lightType] = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            
+            -- Handle non-flashing lights (flash == 0) and disabled lights
+            for lightType, lightControls in pairs(controls.lights) do
+                if lightControls.enabled ~= false then
+                    if lightControls.flash == 0 and not visibleLights[stationId][lightType] then
+                        if not updateLightColor[stationId] then updateLightColor[stationId] = {} end
+                        visibleLights[stationId][lightType] = true
+                        updateLightColor[stationId][lightType] = true
+                    end
+                elseif visibleLights[stationId][lightType] then
+                    if not updateLightColor[stationId] then updateLightColor[stationId] = {} end
+                    visibleLights[stationId][lightType] = false
+                    updateLightColor[stationId][lightType] = true
+                end
+            end
+            
+            -- Apply controls to lights for this station
+            if not station.entityData or not station.entityData.lights then goto continue_station end
             for i=1, #station.entityData.lights do
                 local light = station.entityData.lights[i]
+                local lightControls = controls.lights[light.lightType]
                 local tilt = 0.0
                 local locHz = 0.0
                 local locRot = 0.0
-                local lightControls = controls.lights[light.lightType]
+                
                 if light.lightType == "spotlight" then
                     tilt = -20.0
                 end
@@ -219,19 +314,21 @@ CreateThread(function()
                 if lightControls.rotateVertical then
                     locRot = rot
                 end
-                if updateLightColor[light.lightType] then
+                if updateLightColor[stationId] and updateLightColor[stationId][light.lightType] then
                     if Config.LaggyButCoolLights then
-                        if not visibleLights[light.lightType] then
+                        if not visibleLights[stationId][light.lightType] then
                             SetObjectLightColor(light.entity, 1, 0, 0, 0)
                         else
                             SetObjectLightColor(light.entity, 1, light.color[1], light.color[2], light.color[3])
                         end
                     else
-                        SetEntityVisible(light.entity, visibleLights[light.lightType], false)
+                        SetEntityVisible(light.entity, visibleLights[stationId][light.lightType], false)
                     end
                 end
                 SetEntityRotation(light.entity, locRot + tilt, 0.0, (light.heading) + (locHz), 2, true)
+                ::continue::
             end
+            ::continue_station::
         end
         Wait(0)
     end
@@ -269,8 +366,102 @@ AddEventHandler('onResourceStop', function(resource)
 end)
 
 RegisterNUICallback('setVisible', function(data, cb)
+    if not data.visible then
+        ExitDJCamera()
+    end
     SetNuiFocus(data.visible, data.visible)
     cb(true)
+end)
+
+RegisterNUICallback('updateLightControls', function(data, cb)
+    local stationId = data.stationId
+    local lightType = data.lightType
+    local property = data.property
+    local value = data.value
+    
+    if not stationId or not lightType or not property then
+        cb(false)
+        return
+    end
+    
+    -- Send update to server to network it
+    TriggerServerEvent('pickle_dj:updateLightControls', stationId, lightType, property, value)
+    
+    cb(true)
+end)
+
+RegisterNUICallback('updateAllLightControls', function(data, cb)
+    local stationId = data.stationId
+    local property = data.property
+    local value = data.value
+    
+    if not stationId or not property then
+        cb(false)
+        return
+    end
+    
+    -- Send batch update to server to network it
+    TriggerServerEvent('pickle_dj:updateAllLightControls', stationId, property, value)
+    
+    cb(true)
+end)
+
+-- Receive networked control updates from server
+-- Client only stores what server sends, no mapping or conversion
+RegisterNetEvent('pickle_dj:lightControlsUpdated', function(stationId, lightType, property, value)
+    -- Only update if we have controls from server (initial state must be received first)
+    if not stationControls[stationId] or not stationControls[stationId].lights or not stationControls[stationId].lights[lightType] then
+        return
+    end
+    
+    -- Store exactly what server sends - no mapping or conversion
+    stationControls[stationId].lights[lightType][property] = value
+    
+    -- Convert flash number to string for UI using shared function
+    local uiValue = value
+    if property == "flash" then
+        uiValue = GetFlashString(value)
+    end
+    
+    -- Send to NUI for UI updates
+    SendNUIMessage({
+        type = 'music:lightControlsUpdated',
+        data = {
+            stationId = stationId,
+            lightType = lightType,
+            property = property,
+            value = uiValue
+        }
+    })
+end)
+
+-- Receive initial control state when opening controller
+RegisterNetEvent('pickle_dj:lightControlsState', function(stationId, controlsData)
+    if controlsData then
+        stationControls[stationId] = controlsData
+        -- Convert flash numeric values to strings for UI (deep copy with conversion)
+        local uiControls = {}
+        if controlsData.lights then
+            uiControls.lights = {}
+            for lightType, lightControl in pairs(controlsData.lights) do
+                -- Ensure all boolean values are explicitly set (nil defaults: enabled=true, others=false)
+                uiControls.lights[lightType] = {
+                    enabled = (lightControl.enabled ~= false), -- nil or true = true, false = false
+                    rotateHorizontal = (lightControl.rotateHorizontal == true), -- explicit true check
+                    rotateVertical = (lightControl.rotateVertical == true), -- explicit true check
+                    flash = GetFlashString(lightControl.flash) or "off"
+                }
+            end
+        end
+        -- Send to NUI with converted values
+        SendNUIMessage({
+            type = 'music:lightControlsState',
+            data = {
+                stationId = stationId,
+                controls = uiControls
+            }
+        })
+    end
 end)
 
 -- DJ Station Creation System
