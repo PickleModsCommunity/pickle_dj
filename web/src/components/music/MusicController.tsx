@@ -1870,12 +1870,12 @@ export default function MusicController() {
                                         <RangeControl
                                             orientation="vertical"
                                             barStyle={{
-                                                left: "-101px",
-                                                width: "193px",
+                                                left: "-142px",
+                                                width: "265px",
                                             }}
                                             vuMeterStyle={{
-                                                top: "13px",
-                                                height: "195px",
+                                                top: "6px",
+                                                height: "265px",
                                                 transform: "none",
                                             }}
                                             min={0}

@@ -124,7 +124,7 @@ local function RenderDJStationProps(id)
         for i, light in ipairs(station.lights) do
             -- Find or create light data entry
             local lightData = nil
-            lightData = LocalDJStations[id].entityData.lights[i]
+                lightData = LocalDJStations[id].entityData.lights[i]
             -- Only create entity if it doesn't exist
             if not lightData.entity or not DoesEntityExist(lightData.entity) then
                 local spec = (Config.LightTypes and light.data.lightType and Config.LightTypes[light.data.lightType]) or nil
@@ -256,6 +256,9 @@ function RegisterDJStation(id)
                         onSelect = function()
                             -- Check if player can access the controller before opening UI
                             lib.callback('pickle_dj:canAccessController', false, function(canAccess, errorMessage)
+                                -- Store id in a local variable for use in the callback
+                                local stationId = id
+                                local station = DJStations[id]
                                 if not canAccess then
                                     if errorMessage then
                                         ShowNotification(errorMessage, "error")
@@ -266,59 +269,189 @@ function RegisterDJStation(id)
                                 end
                                 
                                 -- Access granted, proceed with opening UI
-                                SetMusicController(station.streamId)
-                                CreateThread(function()
-                                    -- Ensure props are rendered before opening controller
-                                    if not LocalDJStations[id].entity or not DoesEntityExist(LocalDJStations[id].entity) then
-                                        RenderDJStationProps(id)
-                                        Wait(100) -- Give props time to spawn
-                                    end
-                                    local coords = GetEntityCoords(LocalDJStations[id].entity) + vector3(0.0, 0.0, 2.0)
-                                    coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * -1.0
-                                    SetNuiFocus(true, true)
-                                    CreateDJCamera()
-                                    SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z,
-                                        -30.0, 0.0, station.heading + 0.0, 90.0, 
-                                        2000, 0, 0, 2
-                                    )
+                            SetMusicController(station.streamId)
+                            CreateThread(function()
+                                -- Ensure props are rendered before opening controller
+                                if not LocalDJStations[id].entity or not DoesEntityExist(LocalDJStations[id].entity) then
+                                    RenderDJStationProps(id)
+                                    Wait(100) -- Give props time to spawn
+                                end
+                                local coords = GetEntityCoords(LocalDJStations[id].entity) + vector3(0.0, 0.0, 2.0)
+                                coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * -1.0
+                                SetNuiFocus(true, true)
+                                CreateDJCamera()
+                                SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z,
+                                    -30.0, 0.0, station.heading + 0.0, 90.0, 
+                                    2000, 0, 0, 2
+                                )
+                                end)
+                                
                                 -- Light controls are now part of station data, so they're already available
                                 -- Send current light controls state to NUI
+                                print("^2[DJ Controller]^0 ===== OPENING CONTROLLER =====")
+                                print("^2[DJ Controller]^0 Station ID: " .. tostring(id))
+                                print("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "] exists: " .. tostring(stationControls[id] ~= nil))
+                                
+                                -- Debug: Check all station IDs in stationControls
+                                local stationIds = {}
+                                for sid, _ in pairs(stationControls) do
+                                    table.insert(stationIds, tostring(sid))
+                                end
+                                print("^2[DJ Controller]^0 Available station IDs in stationControls: " .. table.concat(stationIds, ", "))
+                                
+                                Citizen.Trace("^2[DJ Controller]^0 Opening controller for station " .. tostring(id) .. "\n")
                                 if stationControls[id] then
+                                    print("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "].lights exists: " .. tostring(stationControls[id].lights ~= nil))
+                                    Citizen.Trace("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "].lights exists: " .. tostring(stationControls[id].lights ~= nil) .. "\n")
                                     local uiControls = {}
                                     uiControls.speed = GetSpeedString(stationControls[id].speed or 2.0)
                                     if stationControls[id].lights then
                                         uiControls.lights = {}
                                         for lightType, lightControl in pairs(stationControls[id].lights) do
+                                            -- Ensure colors are properly formatted as arrays
+                                            local primaryColor = lightControl.primaryColor
+                                            local secondaryColor = lightControl.secondaryColor
+                                            
+                                            -- Debug: Check what we're getting
+                                            print("^2[DJ Controller]^0 Light type: " .. tostring(lightType))
+                                            if primaryColor then
+                                                print("^2[DJ Controller]^0 primaryColor type: " .. type(primaryColor) .. ", value: [" .. tostring(primaryColor[1] or "nil") .. ", " .. tostring(primaryColor[2] or "nil") .. ", " .. tostring(primaryColor[3] or "nil") .. "]")
+                                            else
+                                                print("^2[DJ Controller]^0 primaryColor is nil")
+                                            end
+                                            if secondaryColor then
+                                                print("^2[DJ Controller]^0 secondaryColor type: " .. type(secondaryColor) .. ", value: [" .. tostring(secondaryColor[1] or "nil") .. ", " .. tostring(secondaryColor[2] or "nil") .. ", " .. tostring(secondaryColor[3] or "nil") .. "]")
+                                            else
+                                                print("^2[DJ Controller]^0 secondaryColor is nil")
+                                            end
+                                            
+                                            -- Validate and normalize primary color
+                                            if primaryColor and type(primaryColor) == "table" then
+                                                -- Check if it's a proper array with 3 elements (use rawget to handle 0 values)
+                                                local r, g, b = primaryColor[1], primaryColor[2], primaryColor[3]
+                                                if r ~= nil and g ~= nil and b ~= nil then
+                                                    primaryColor = {r, g, b}
+                                                else
+                                                    primaryColor = nil -- Invalid, will use default
+                                                end
+                                            else
+                                                primaryColor = nil -- Invalid, will use default
+                                            end
+                                            
+                                            -- Use defaults if validation failed
+                                            if not primaryColor then
+                                                if lightType == "ambient" then
+                                                    primaryColor = {255, 0, 0} -- red
+                                                elseif lightType == "spotlight" then
+                                                    primaryColor = {0, 255, 0} -- green
+                                                elseif lightType == "barlight" then
+                                                    primaryColor = {0, 0, 255} -- blue
+                                                else
+                                                    primaryColor = {255, 0, 0} -- default red
+                                                end
+                                            end
+                                            
+                                            -- Validate and normalize secondary color
+                                            if secondaryColor and type(secondaryColor) == "table" then
+                                                -- Check if it's a proper array with 3 elements (use rawget to handle 0 values)
+                                                local r, g, b = secondaryColor[1], secondaryColor[2], secondaryColor[3]
+                                                if r ~= nil and g ~= nil and b ~= nil then
+                                                    secondaryColor = {r, g, b}
+                                                else
+                                                    secondaryColor = nil -- Invalid, will use default
+                                                end
+                                            else
+                                                secondaryColor = nil -- Invalid, will use default
+                                            end
+                                            
+                                            -- Use defaults if validation failed
+                                            if not secondaryColor then
+                                                if lightType == "ambient" then
+                                                    secondaryColor = {255, 100, 0} -- orange
+                                                elseif lightType == "spotlight" then
+                                                    secondaryColor = {0, 200, 255} -- cyan
+                                                elseif lightType == "barlight" then
+                                                    secondaryColor = {255, 0, 255} -- magenta
+                                                else
+                                                    secondaryColor = {255, 100, 0} -- default orange
+                                                end
+                                            end
+                                            
+                                            print("^2[DJ Controller]^0 Final colors for " .. lightType .. " - primary: [" .. primaryColor[1] .. ", " .. primaryColor[2] .. ", " .. primaryColor[3] .. "], secondary: [" .. secondaryColor[1] .. ", " .. secondaryColor[2] .. ", " .. secondaryColor[3] .. "]")
+                                            
+                                            -- Ensure colors are always arrays (defensive check)
+                                            local finalPrimaryColor = primaryColor
+                                            local finalSecondaryColor = secondaryColor
+                                            if not finalPrimaryColor or type(finalPrimaryColor) ~= "table" or #finalPrimaryColor ~= 3 then
+                                                print("^1[DJ Controller]^0 ERROR: primaryColor invalid for " .. lightType .. ", using default")
+                                                if lightType == "ambient" then
+                                                    finalPrimaryColor = {255, 0, 0}
+                                                elseif lightType == "spotlight" then
+                                                    finalPrimaryColor = {0, 255, 0}
+                                                elseif lightType == "barlight" then
+                                                    finalPrimaryColor = {0, 0, 255}
+                                                else
+                                                    finalPrimaryColor = {255, 0, 0}
+                                                end
+                                            end
+                                            if not finalSecondaryColor or type(finalSecondaryColor) ~= "table" or #finalSecondaryColor ~= 3 then
+                                                print("^1[DJ Controller]^0 ERROR: secondaryColor invalid for " .. lightType .. ", using default")
+                                                if lightType == "ambient" then
+                                                    finalSecondaryColor = {255, 100, 0}
+                                                elseif lightType == "spotlight" then
+                                                    finalSecondaryColor = {0, 200, 255}
+                                                elseif lightType == "barlight" then
+                                                    finalSecondaryColor = {255, 0, 255}
+                                                else
+                                                    finalSecondaryColor = {255, 100, 0}
+                                                end
+                                            end
+                                            
+                                            print("^2[DJ Controller]^0 Sending to NUI for " .. lightType .. " - primaryColor: [" .. finalPrimaryColor[1] .. ", " .. finalPrimaryColor[2] .. ", " .. finalPrimaryColor[3] .. "], secondaryColor: [" .. finalSecondaryColor[1] .. ", " .. finalSecondaryColor[2] .. ", " .. finalSecondaryColor[3] .. "]")
+                                            
                                             uiControls.lights[lightType] = {
                                                 enabled = (lightControl.enabled ~= false),
                                                 rotateHorizontal = (lightControl.rotateHorizontal == true),
                                                 rotateVertical = (lightControl.rotateVertical == true),
                                                 flash = GetFlashString(lightControl.flash) or "off",
                                                 speed = GetSpeedString(lightControl.speed or 2.0),
-                                                primaryColor = lightControl.primaryColor or {255, 0, 0},
-                                                secondaryColor = lightControl.secondaryColor or {255, 100, 0}
+                                                primaryColor = finalPrimaryColor,
+                                                secondaryColor = finalSecondaryColor
                                             }
                                         end
+                                    else
+                                        print("^1[DJ Controller]^0 WARNING: stationControls[" .. tostring(id) .. "].lights is nil!")
                                     end
-                                    SendNUIMessage({
-                                        type = 'music:lightControlsState',
-                                        data = {
-                                            stationId = id,
-                                            controls = uiControls
-                                        }
-                                    })
+                                    print("^2[DJ Controller]^0 Sending light controls to NUI...")
+                                    -- Send setControllerVisible FIRST to set currentStationId, then send light controls
+                                SendNUIMessage({
+                                    type = 'music:setControllerVisible',
+                                    visible = true,
+                                    stationId = id,
+                                    streamId = station.streamId
+                                })
+                                    -- Use a small delay to ensure React has processed setControllerVisible and updated currentStationId
+                                    -- We use CreateThread with Wait instead of Wait(0) since we're in a callback
+                                    CreateThread(function()
+                                        Wait(50) -- Small delay to let React process the state update
+                                        SendNUIMessage({
+                                            type = 'music:lightControlsState',
+                                            data = {
+                                                stationId = id,
+                                                controls = uiControls
+                                            }
+                                        })
+                                        print("^2[DJ Controller]^0 Light controls sent to NUI (delayed)")
+                                    end)
+                                    print("^2[DJ Controller]^0 Light controls queued to send")
+                                else
+                                    print("^1[DJ Controller]^0 WARNING: stationControls[" .. tostring(id) .. "] is nil! Light controls not available.")
                                 end
+                                
                                 -- Request particle effects state
                                 TriggerServerEvent('pickle_dj:requestParticleEffects', id)
                                 -- Notify server that player is opening controller (will auto-assign as broadcaster)
                                 TriggerServerEvent('pickle_dj:openController', id)
-                                    SendNUIMessage({
-                                        type = 'music:setControllerVisible',
-                                        visible = true,
-                                        stationId = id,
-                                        streamId = station.streamId
-                                    })
-                                end)
                             end, id)
                         end
                     },
@@ -441,7 +574,7 @@ end
 -- Per-station light controls (stationId -> controls)
 -- flash: 0 = off, 1 = high (every tick), 2 = low (every 2 ticks)
 -- Controls are ONLY set from server, never initialized locally
-local stationControls = {}
+-- Note: stationControls is declared at the top of the file (line 3)
 
 -- Per-station particle effects (stationId -> effects)
 -- Effects are ONLY set from server, never initialized locally
@@ -741,12 +874,68 @@ CreateThread(function()
 end)
 
 RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
+    print("^3[DJ Register]^0 Event received - id type: " .. type(id))
     if type(id) == 'table' then
+        print("^3[DJ Register]^0 Processing bulk station sync - " .. tostring(table.count or "unknown") .. " stations")
         for id, station in pairs(id) do
             DJStations[id] = station
             -- Store light controls from station data
             if station.lightControls then
-                stationControls[id] = station.lightControls
+                print("^3[DJ Register]^0 Setting stationControls[" .. tostring(id) .. "] from station data")
+                Citizen.Trace("^3[DJ Register]^0 Setting stationControls[" .. tostring(id) .. "] from station data\n")
+                -- Deep copy the entire light controls structure to avoid reference issues
+                stationControls[id] = {
+                    speed = station.lightControls.speed,
+                    lights = {}
+                }
+                if station.lightControls.lights then
+                    print(string.format("[DJ Register] Found %d light types in station.lightControls.lights", 0)) -- Will count below
+                    local count = 0
+                    for lightType, lightControl in pairs(station.lightControls.lights) do
+                        count = count + 1
+                        -- Extract colors properly, handling nil and ensuring proper array format
+                        local primaryColor = nil
+                        if lightControl.primaryColor and type(lightControl.primaryColor) == "table" then
+                            local r, g, b = lightControl.primaryColor[1], lightControl.primaryColor[2], lightControl.primaryColor[3]
+                            if r ~= nil and g ~= nil and b ~= nil then
+                                primaryColor = {r, g, b}
+                                print(string.format("[DJ Register] %s primaryColor: [%d, %d, %d]", lightType, r, g, b))
+                            else
+                                print(string.format("[DJ Register] %s primaryColor invalid: r=%s, g=%s, b=%s", lightType, tostring(r), tostring(g), tostring(b)))
+                            end
+                        else
+                            print(string.format("[DJ Register] %s primaryColor missing or wrong type: %s", lightType, type(lightControl.primaryColor)))
+                        end
+                        
+                        local secondaryColor = nil
+                        if lightControl.secondaryColor and type(lightControl.secondaryColor) == "table" then
+                            local r, g, b = lightControl.secondaryColor[1], lightControl.secondaryColor[2], lightControl.secondaryColor[3]
+                            if r ~= nil and g ~= nil and b ~= nil then
+                                secondaryColor = {r, g, b}
+                                print(string.format("[DJ Register] %s secondaryColor: [%d, %d, %d]", lightType, r, g, b))
+                            else
+                                print(string.format("[DJ Register] %s secondaryColor invalid: r=%s, g=%s, b=%s", lightType, tostring(r), tostring(g), tostring(b)))
+                            end
+                        else
+                            print(string.format("[DJ Register] %s secondaryColor missing or wrong type: %s", lightType, type(lightControl.secondaryColor)))
+                        end
+                        
+                        stationControls[id].lights[lightType] = {
+                            enabled = lightControl.enabled,
+                            rotateHorizontal = lightControl.rotateHorizontal,
+                            rotateVertical = lightControl.rotateVertical,
+                            flash = lightControl.flash,
+                            speed = lightControl.speed,
+                            primaryColor = primaryColor,
+                            secondaryColor = secondaryColor
+                        }
+                    end
+                    print(string.format("[DJ Register] Processed %d light types for stationControls[%s]", count, id))
+                else
+                    print(string.format("[DJ Register] WARNING: station.lightControls.lights is nil for station %s", id))
+                end
+            else
+                print(string.format("[DJ Register] WARNING: station.lightControls is nil for station %s", id))
             end
             RegisterDJStation(id)
             
@@ -788,7 +977,41 @@ RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
     DJStations[id] = station
     -- Store light controls from station data
     if station.lightControls then
-        stationControls[id] = station.lightControls
+        -- Deep copy the entire light controls structure to avoid reference issues
+        stationControls[id] = {
+            speed = station.lightControls.speed,
+            lights = {}
+        }
+        if station.lightControls.lights then
+            for lightType, lightControl in pairs(station.lightControls.lights) do
+                -- Extract colors properly, handling nil and ensuring proper array format
+                local primaryColor = nil
+                if lightControl.primaryColor and type(lightControl.primaryColor) == "table" then
+                    local r, g, b = lightControl.primaryColor[1], lightControl.primaryColor[2], lightControl.primaryColor[3]
+                    if r ~= nil and g ~= nil and b ~= nil then
+                        primaryColor = {r, g, b}
+                    end
+                end
+                
+                local secondaryColor = nil
+                if lightControl.secondaryColor and type(lightControl.secondaryColor) == "table" then
+                    local r, g, b = lightControl.secondaryColor[1], lightControl.secondaryColor[2], lightControl.secondaryColor[3]
+                    if r ~= nil and g ~= nil and b ~= nil then
+                        secondaryColor = {r, g, b}
+                    end
+                end
+                
+                stationControls[id].lights[lightType] = {
+                    enabled = lightControl.enabled,
+                    rotateHorizontal = lightControl.rotateHorizontal,
+                    rotateVertical = lightControl.rotateVertical,
+                    flash = lightControl.flash,
+                    speed = lightControl.speed,
+                    primaryColor = primaryColor,
+                    secondaryColor = secondaryColor
+                }
+            end
+        end
     end
     RegisterDJStation(id)
     
@@ -1128,6 +1351,60 @@ RegisterNetEvent('pickle_dj:lightControlsState', function(stationId, controlsDat
         if controlsData.lights then
             uiControls.lights = {}
             for lightType, lightControl in pairs(controlsData.lights) do
+                -- Ensure colors are properly formatted as arrays
+                local primaryColor = lightControl.primaryColor
+                local secondaryColor = lightControl.secondaryColor
+                
+                -- Validate and normalize primary color
+                if primaryColor and type(primaryColor) == "table" then
+                    -- Check if it's a proper array with 3 elements
+                    if primaryColor[1] and primaryColor[2] and primaryColor[3] then
+                        primaryColor = {primaryColor[1], primaryColor[2], primaryColor[3]}
+                    else
+                        primaryColor = nil -- Invalid, will use default
+                    end
+                else
+                    primaryColor = nil -- Invalid, will use default
+                end
+                
+                -- Use defaults if validation failed
+                if not primaryColor then
+                    if lightType == "ambient" then
+                        primaryColor = {255, 0, 0} -- red
+                    elseif lightType == "spotlight" then
+                        primaryColor = {0, 255, 0} -- green
+                    elseif lightType == "barlight" then
+                        primaryColor = {0, 0, 255} -- blue
+                    else
+                        primaryColor = {255, 0, 0} -- default red
+                    end
+                end
+                
+                -- Validate and normalize secondary color
+                if secondaryColor and type(secondaryColor) == "table" then
+                    -- Check if it's a proper array with 3 elements
+                    if secondaryColor[1] and secondaryColor[2] and secondaryColor[3] then
+                        secondaryColor = {secondaryColor[1], secondaryColor[2], secondaryColor[3]}
+                    else
+                        secondaryColor = nil -- Invalid, will use default
+                    end
+                else
+                    secondaryColor = nil -- Invalid, will use default
+                end
+                
+                -- Use defaults if validation failed
+                if not secondaryColor then
+                    if lightType == "ambient" then
+                        secondaryColor = {255, 100, 0} -- orange
+                    elseif lightType == "spotlight" then
+                        secondaryColor = {0, 200, 255} -- cyan
+                    elseif lightType == "barlight" then
+                        secondaryColor = {255, 0, 255} -- magenta
+                    else
+                        secondaryColor = {255, 100, 0} -- default orange
+                    end
+                end
+                
                 -- Ensure all boolean values are explicitly set (nil defaults: enabled=true, others=false)
                 uiControls.lights[lightType] = {
                     enabled = (lightControl.enabled ~= false), -- nil or true = true, false = false
@@ -1135,8 +1412,8 @@ RegisterNetEvent('pickle_dj:lightControlsState', function(stationId, controlsDat
                     rotateVertical = (lightControl.rotateVertical == true), -- explicit true check
                     flash = GetFlashString(lightControl.flash) or "off",
                     speed = GetSpeedString(lightControl.speed or 2.0),
-                    primaryColor = lightControl.primaryColor or {255, 0, 0},
-                    secondaryColor = lightControl.secondaryColor or {255, 100, 0}
+                    primaryColor = primaryColor,
+                    secondaryColor = secondaryColor
                 }
             end
         end

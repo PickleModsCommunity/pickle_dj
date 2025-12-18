@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { fetchNui } from "@/providers/nui/fetchNui";
 import { useNuiEvent } from "../../providers/nui/useNui";
 
@@ -39,8 +39,8 @@ export default function LightControls({ lightType, label, stationId, initialStat
         rotateVertical: false,
         flash: "low",
         speed: "normal",
-        primaryColor: [255, 0, 0],
-        secondaryColor: [255, 100, 0],
+        primaryColor: [0, 0, 0],
+        secondaryColor: [0, 0, 0],
     };
     
     const [state, setState] = useState<LightControlState>(
@@ -64,13 +64,42 @@ export default function LightControls({ lightType, label, stationId, initialStat
 
     // Listen for initial state from server
     useNuiEvent("music:lightControlsState", (event: any) => {
+        // Event structure: { type: 'music:lightControlsState', data: { stationId, controls } }
+        // useNuiEvent passes event.data directly, so event is already { type, data }
+        console.log(`[LightControls] Raw event received for ${lightType}:`, event);
         const data = event.data || event;
-        // Only process if stationId matches and we have valid data
-        if (!stationId || data.stationId !== stationId) return;
-        if (!data.controls || !data.controls.lights || !data.controls.lights[lightType]) return;
+        console.log(`[LightControls] Processed data for ${lightType}:`, data);
+        console.log(`[LightControls] Received lightControlsState event for ${lightType}:`, { 
+            stationId, 
+            dataStationId: data.stationId, 
+            hasControls: !!data.controls,
+            hasLights: !!(data.controls && data.controls.lights),
+            hasLightType: !!(data.controls && data.controls.lights && data.controls.lights[lightType]),
+            fullEvent: event
+        });
+        
+        // Only process if we have valid data
+        if (!data.stationId) {
+            console.warn(`[LightControls] No stationId in event data for ${lightType}, ignoring event`);
+            return;
+        }
+        
+        // If stationId prop is set, it must match. Otherwise, accept any stationId (for timing issues)
+        if (stationId !== null && stationId !== undefined && data.stationId !== stationId) {
+            console.warn(`[LightControls] StationId mismatch for ${lightType}: prop=${stationId}, event=${data.stationId}`);
+            return;
+        }
+        if (!data.controls || !data.controls.lights || !data.controls.lights[lightType]) {
+            console.warn(`[LightControls] Missing controls for ${lightType}:`, data);
+            return;
+        }
         
         const lightControl = data.controls.lights[lightType];
         if (lightControl) {
+            console.log(`[LightControls] Received controls for ${lightType}:`, lightControl);
+            console.log(`[LightControls] primaryColor:`, lightControl.primaryColor, `type:`, typeof lightControl.primaryColor, `isArray:`, Array.isArray(lightControl.primaryColor));
+            console.log(`[LightControls] secondaryColor:`, lightControl.secondaryColor, `type:`, typeof lightControl.secondaryColor, `isArray:`, Array.isArray(lightControl.secondaryColor));
+            
             // Flash value is already converted to string by client, use directly or convert if number
             let flashValue: FlashSetting = "off";
             if (typeof lightControl.flash === "string") {
@@ -90,12 +119,30 @@ export default function LightControls({ lightType, label, stationId, initialStat
                 : "normal";
             
             // Handle colors (defaults if not present)
-            const primaryColor: [number, number, number] = Array.isArray(lightControl.primaryColor) && lightControl.primaryColor.length === 3
-                ? [lightControl.primaryColor[0], lightControl.primaryColor[1], lightControl.primaryColor[2]]
-                : [255, 0, 0];
-            const secondaryColor: [number, number, number] = Array.isArray(lightControl.secondaryColor) && lightControl.secondaryColor.length === 3
-                ? [lightControl.secondaryColor[0], lightControl.secondaryColor[1], lightControl.secondaryColor[2]]
-                : [255, 100, 0];
+            let primaryColor: [number, number, number] = [255, 0, 0];
+            let secondaryColor: [number, number, number] = [255, 100, 0];
+            
+            if (lightControl.primaryColor) {
+                if (Array.isArray(lightControl.primaryColor) && lightControl.primaryColor.length === 3) {
+                    primaryColor = [lightControl.primaryColor[0], lightControl.primaryColor[1], lightControl.primaryColor[2]];
+                } else {
+                    console.warn(`[LightControls] Invalid primaryColor format for ${lightType}:`, lightControl.primaryColor);
+                }
+            } else {
+                console.warn(`[LightControls] primaryColor missing for ${lightType}, using default`);
+            }
+            
+            if (lightControl.secondaryColor) {
+                if (Array.isArray(lightControl.secondaryColor) && lightControl.secondaryColor.length === 3) {
+                    secondaryColor = [lightControl.secondaryColor[0], lightControl.secondaryColor[1], lightControl.secondaryColor[2]];
+                } else {
+                    console.warn(`[LightControls] Invalid secondaryColor format for ${lightType}:`, lightControl.secondaryColor);
+                }
+            } else {
+                console.warn(`[LightControls] secondaryColor missing for ${lightType}, using default`);
+            }
+            
+            console.log(`[LightControls] Final colors for ${lightType} - primary:`, primaryColor, `secondary:`, secondaryColor);
             
             setState({
                 enabled: enabled,

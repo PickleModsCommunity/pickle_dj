@@ -4,12 +4,14 @@ import { useNuiEvent } from "../../providers/nui/useNui";
 
 type LightType = "ambient" | "spotlight" | "barlight";
 type FlashSetting = "off" | "low" | "high";
+type SpeedSetting = "slow" | "normal" | "fast";
 
 interface LightControlState {
     enabled: boolean;
     rotateHorizontal: boolean;
     rotateVertical: boolean;
     flash: FlashSetting;
+    speed: SpeedSetting;
 }
 
 interface MasterLightControlsProps {
@@ -33,6 +35,8 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
         flash: "low",
         speed: "normal",
     });
+    
+    const [isInfoDialogOpen, setIsInfoDialogOpen] = useState(false);
 
     // Listen for initial state from server - use ambient as reference (master sets all to same)
     useNuiEvent("music:lightControlsState", (event: any) => {
@@ -396,6 +400,141 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                     {state.speed}
                 </span>
             </button>
+
+            {/* Information Button */}
+            <button
+                onClick={() => setIsInfoDialogOpen(true)}
+                style={{
+                    width: 48,
+                    height: 48,
+                    border: `2px solid ${isInfoDialogOpen ? "#60d394" : "#555"}`,
+                    borderRadius: 6,
+                    background: isInfoDialogOpen ? "rgba(96, 211, 148, 0.1)" : "#1e1e1e",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    transition: "all 120ms ease",
+                }}
+                onMouseEnter={(e) => {
+                    if (!isInfoDialogOpen) {
+                        e.currentTarget.style.borderColor = "#888";
+                        e.currentTarget.style.background = "#2a2a2a";
+                    }
+                }}
+                onMouseLeave={(e) => {
+                    if (!isInfoDialogOpen) {
+                        e.currentTarget.style.borderColor = "#555";
+                        e.currentTarget.style.background = "#1e1e1e";
+                    }
+                }}
+                title="DJ Controller Information"
+                aria-label="Open DJ controller information"
+            >
+                <svg
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={isInfoDialogOpen ? "#60d394" : "#888"}
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                >
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M12 16v-4M12 8h.01" />
+                </svg>
+            </button>
+
+            {/* Information Dialog */}
+            {isInfoDialogOpen && (
+                <div 
+                    className="modalBackdrop" 
+                    role="dialog" 
+                    aria-modal="true" 
+                    aria-labelledby="info-dialog-title" 
+                    onClick={(e) => {
+                        if (e.target === e.currentTarget) {
+                            setIsInfoDialogOpen(false);
+                        }
+                    }}
+                >
+                    <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 600, maxHeight: 300, display: "flex", flexDirection: "column" }}>
+                        <div className="modalHeader" style={{ flexShrink: 0 }}>
+                            <h3 id="info-dialog-title" style={{ margin: 0, fontSize: 16 }}>DJ Controller Guide</h3>
+                            <button 
+                                className="resetBtn" 
+                                onClick={() => setIsInfoDialogOpen(false)} 
+                                aria-label="Close information dialog"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <div className="modalBody" style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                                <div>
+                                    <h4 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 600, color: "#ddd" }}>Getting Started</h4>
+                                    <p style={{ margin: 0, fontSize: 13, color: "#bbb", lineHeight: 1.6 }}>
+                                        Welcome to the DJ Controller! Use this interface to control music playback, lighting effects, and audio mixing for your DJ station.
+                                    </p>
+                                </div>
+
+                                <div>
+                                    <h4 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 600, color: "#ddd" }}>Music Decks</h4>
+                                    <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#bbb", lineHeight: 1.8 }}>
+                                        <li>Each deck (Left/Right) can play music independently</li>
+                                        <li>Click the play button to start/stop playback</li>
+                                        <li>Use the tempo slider to adjust playback speed</li>
+                                        <li>Add songs to your playlist using the "Add Song" button</li>
+                                        <li>Use the crossfader (balance slider) to mix between decks</li>
+                                    </ul>
+                                </div>
+
+                                <div>
+                                    <h4 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 600, color: "#ddd" }}>Light Controls</h4>
+                                    <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#bbb", lineHeight: 1.8 }}>
+                                        <li><strong>All Lights:</strong> Controls all light types simultaneously</li>
+                                        <li><strong>Individual Lights:</strong> Each light type (Ambient, Spotlight, Bar Light) has its own controls</li>
+                                        <li><strong>Enable/Disable:</strong> Toggle lights on or off</li>
+                                        <li><strong>Rotation:</strong> Control horizontal and vertical rotation</li>
+                                        <li><strong>Flash:</strong> Set flash intensity (off, low, high)</li>
+                                        <li><strong>Speed:</strong> Adjust rotation speed (slow, normal, fast)</li>
+                                        <li><strong>Colors:</strong> Click the color button to set primary and secondary colors for each light type</li>
+                                    </ul>
+                                </div>
+
+                                <div>
+                                    <h4 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 600, color: "#ddd" }}>Effects</h4>
+                                    <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#bbb", lineHeight: 1.8 }}>
+                                        <li><strong>Smoke:</strong> Hold the smoke button to activate smoke effects</li>
+                                        <li><strong>Fire:</strong> Hold the fire button to activate fire effects</li>
+                                        <li>Release the button to stop the effect</li>
+                                    </ul>
+                                </div>
+
+                                <div>
+                                    <h4 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 600, color: "#ddd" }}>Audio Controls</h4>
+                                    <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#bbb", lineHeight: 1.8 }}>
+                                        <li><strong>Master Volume:</strong> Controls overall output volume</li>
+                                        <li><strong>Balance:</strong> Mix audio between left and right decks</li>
+                                        <li><strong>Microphone:</strong> Select and control your microphone input</li>
+                                    </ul>
+                                </div>
+
+                                <div>
+                                    <h4 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 600, color: "#ddd" }}>Tips</h4>
+                                    <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#bbb", lineHeight: 1.8 }}>
+                                        <li>Use the crossfader to smoothly transition between tracks</li>
+                                        <li>Experiment with different light colors and effects to create atmosphere</li>
+                                        <li>Adjust tempo to match beats between tracks</li>
+                                        <li>Individual lights can be set to use primary or secondary colors via the entity management menu</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

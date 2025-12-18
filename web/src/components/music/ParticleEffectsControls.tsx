@@ -154,7 +154,7 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
     }, []);
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", height: "302px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", height: "358px" }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: "#ddd", marginBottom: 4 }}>
                 Effects
             </div>
