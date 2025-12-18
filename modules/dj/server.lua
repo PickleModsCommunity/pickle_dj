@@ -5,6 +5,19 @@ local StationDBMapping = {} -- Maps game ID to database ID
 -- flash: 0 = off, 1 = high (every tick), 2 = low (every 2 ticks)
 local StationLightControls = {}
 
+-- Per-station particle effects (in-memory only, not saved to database)
+local StationParticleEffects = {}
+
+local function getStationParticleEffects(stationId)
+    if not StationParticleEffects[stationId] then
+        StationParticleEffects[stationId] = {
+            smoke = false,
+            fire = false,
+        }
+    end
+    return StationParticleEffects[stationId]
+end
+
 -- Initialize default controls for a station if they don't exist
 
 local function getStationLightControls(stationId)
@@ -787,6 +800,33 @@ RegisterNetEvent('pickle_dj:openController', function(stationId)
     TriggerClientEvent("music:musicInstanceUpdated", -1, musicInstanceId, inst)
     -- legacy: notify broadcast started
     TriggerClientEvent('music:rtc:broadcastStarted', -1, json.encode({ streamId = streamId, broadcaster = source }))
+end)
+
+-- Update particle effects for a station (networked to all clients)
+RegisterNetEvent('pickle_dj:updateParticleEffect', function(stationId, effect, value)
+    local source = source
+    local effects = getStationParticleEffects(stationId)
+    
+    if not effects then
+        return
+    end
+    
+    if effect == "smoke" then
+        effects.smoke = value == true
+    elseif effect == "fire" then
+        effects.fire = value == true
+    end
+    
+    -- Network the update to all clients
+    TriggerClientEvent('pickle_dj:particleEffectsUpdated', -1, stationId, effect, value)
+end)
+
+-- Request particle effects state for a station
+RegisterNetEvent('pickle_dj:requestParticleEffects', function(stationId)
+    local source = source
+    local effects = getStationParticleEffects(stationId)
+    -- Send current state to requesting client
+    TriggerClientEvent('pickle_dj:particleEffectsState', source, stationId, effects)
 end)
 
 -- Note: We no longer stop broadcasting when controller closes

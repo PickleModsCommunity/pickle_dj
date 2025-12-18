@@ -5,6 +5,7 @@ import { Mic, MicOff, Plus } from "lucide-react";
 import { fetchNui } from "@/providers/nui/fetchNui";
 import LightControls from "./LightControls";
 import MasterLightControls from "./MasterLightControls";
+import ParticleEffectsControls from "./ParticleEffectsControls";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -1927,6 +1928,7 @@ export default function MusicController() {
                                         <LightControls lightType="ambient" label="Ambient" stationId={currentStationId} />
                                         <LightControls lightType="spotlight" label="Spotlight" stationId={currentStationId} />
                                         <LightControls lightType="barlight" label="Bar Light" stationId={currentStationId} />
+                                        <ParticleEffectsControls stationId={currentStationId} />
                                     </div>
                                 </div>
                                  <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>

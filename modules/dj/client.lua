@@ -300,11 +300,13 @@ function RegisterDJStation(id)
                                         -30.0, 0.0, station.heading + 0.0, 90.0, 
                                         2000, 0, 0, 2
                                     )
-                                    -- Request latest light controls state from server when opening controller
-                                    -- This ensures we always have the correct state, even if client state is stale
-                                    TriggerServerEvent('pickle_dj:requestLightControls', id)
-                                    -- Notify server that player is opening controller (will auto-assign as broadcaster)
-                                    TriggerServerEvent('pickle_dj:openController', id)
+                                -- Request latest light controls state from server when opening controller
+                                -- This ensures we always have the correct state, even if client state is stale
+                                TriggerServerEvent('pickle_dj:requestLightControls', id)
+                                -- Request particle effects state
+                                TriggerServerEvent('pickle_dj:requestParticleEffects', id)
+                                -- Notify server that player is opening controller (will auto-assign as broadcaster)
+                                TriggerServerEvent('pickle_dj:openController', id)
                                     SendNUIMessage({
                                         type = 'music:setControllerVisible',
                                         visible = true,
@@ -405,6 +407,10 @@ end
 -- flash: 0 = off, 1 = high (every tick), 2 = low (every 2 ticks)
 -- Controls are ONLY set from server, never initialized locally
 local stationControls = {}
+
+-- Per-station particle effects (stationId -> effects)
+-- Effects are ONLY set from server, never initialized locally
+local stationParticleEffects = {}
 
 -- Render distance thread - manages prop rendering based on distance
 CreateThread(function()
@@ -617,31 +623,58 @@ CreateThread(function()
                 SetEntityRotation(light.entity, locRot + tilt, 0.0, (light.heading) + (locHz), 2, true)
                 ::continue::
             end
-            for i=1, #station.entityData.smokemachines do
-                local smokeMachine = station.entityData.smokemachines[i]
-                if not smokeMachine.entity or not DoesEntityExist(smokeMachine.entity) then goto continue end
-                if not smokeMachine.smokeParticle then
-                    RequestNamedPtfxAsset("scr_ar_planes")
-                    while not HasNamedPtfxAssetLoaded("scr_ar_planes") do
-                        Citizen.Wait(0)
+            -- Handle particle effects for smoke machines
+            local particleEffects = stationParticleEffects[stationId]
+            if particleEffects and station.entityData and station.entityData.smokemachines then
+                for i=1, #station.entityData.smokemachines do
+                    local smokeMachine = station.entityData.smokemachines[i]
+                    if not smokeMachine.entity or not DoesEntityExist(smokeMachine.entity) then goto continue_smoke end
+                    
+                    -- Handle smoke effect
+                    if particleEffects.smoke then
+                        if not smokeMachine.smokeParticle then
+                            RequestNamedPtfxAsset("scr_ar_planes")
+                            while not HasNamedPtfxAssetLoaded("scr_ar_planes") do
+                                Citizen.Wait(0)
+                            end
+                            UseParticleFxAssetNextCall("scr_ar_planes")
+                            smokeMachine.smokeParticle = StartParticleFxLoopedOnEntity("scr_ar_trail_smoke", smokeMachine.entity, 0.0, -1.5, 0.0, 0.0, 90.0, -90.0, 0.5, false, false, false)
+                        end
+                    else
+                        if smokeMachine.smokeParticle then
+                            StopParticleFxLooped(smokeMachine.smokeParticle, false)
+                            RemoveParticleFx(smokeMachine.smokeParticle, true)
+                            smokeMachine.smokeParticle = nil
+                        end
                     end
-                    UseParticleFxAssetNextCall("scr_ar_planes")
-                    smokeMachine.smokeParticle = StartParticleFxLoopedOnEntity("scr_ar_trail_smoke", smokeMachine.entity, 0.0, -1.5, 0.0, 0.0, 90.0, -90.0, 0.5, false, false, false)
-                end
-                if not smokeMachine.flameParticle then
-                    RequestNamedPtfxAsset("core")
-                    while not HasNamedPtfxAssetLoaded("core") do
-                        Citizen.Wait(0)
+                    
+                    -- Handle fire effect
+                    if particleEffects.fire then
+                        if not smokeMachine.flameParticle then
+                            RequestNamedPtfxAsset("core")
+                            while not HasNamedPtfxAssetLoaded("core") do
+                                Citizen.Wait(0)
+                            end
+                            UseParticleFxAssetNextCall("core")
+                            smokeMachine.flameParticle = StartParticleFxLoopedOnEntity("ent_sht_flame", smokeMachine.entity, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0, false, false, false)
+                            SetTimeout(7000, function()
+                                if smokeMachine.flameParticle then
+                                    StopParticleFxLooped(smokeMachine.flameParticle, false)
+                                    RemoveParticleFx(smokeMachine.flameParticle, false)
+                                    smokeMachine.flameParticle = nil
+                                end
+                            end)
+                        end
+                    else
+                        if smokeMachine.flameParticle then
+                            print("Removing flame particle")
+                            StopParticleFxLooped(smokeMachine.flameParticle, false)
+                            RemoveParticleFx(smokeMachine.flameParticle, true)
+                            smokeMachine.flameParticle = nil
+                        end
                     end
-                    UseParticleFxAssetNextCall("core")
-                    smokeMachine.flameParticle = StartParticleFxNonLoopedOnEntity("ent_sht_flame", smokeMachine.entity, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0, false, false, false)
-                    SetTimeout(7000, function()
-                        if not smokeMachine.flameParticle then return end
-                        RemoveParticleFx(smokeMachine.flameParticle, true)
-                        smokeMachine.flameParticle = nil
-                    end)
+                    ::continue_smoke::
                 end
-                ::continue::
             end
             ::continue_station::
         end
@@ -774,6 +807,22 @@ RegisterNUICallback('updateLightSpeed', function(data, cb)
     cb(true)
 end)
 
+RegisterNUICallback('updateParticleEffect', function(data, cb)
+    local stationId = data.stationId
+    local effect = data.effect
+    local value = data.value
+    
+    if not stationId or not effect or value == nil then
+        cb(false)
+        return
+    end
+    
+    -- Send update to server to network it
+    TriggerServerEvent('pickle_dj:updateParticleEffect', stationId, effect, value)
+    
+    cb(true)
+end)
+
 -- Receive networked control updates from server
 -- Client only stores what server sends, no mapping or conversion
 RegisterNetEvent('pickle_dj:lightControlsUpdated', function(stationId, lightType, property, value)
@@ -801,6 +850,50 @@ RegisterNetEvent('pickle_dj:lightControlsUpdated', function(stationId, lightType
             lightType = lightType,
             property = property,
             value = uiValue
+        }
+    })
+end)
+
+-- Receive particle effects state from server
+RegisterNetEvent('pickle_dj:particleEffectsState', function(stationId, effectsData)
+    if effectsData then
+        stationParticleEffects[stationId] = {
+            smoke = effectsData.smoke == true,
+            fire = effectsData.fire == true,
+        }
+        -- Send to NUI
+        SendNUIMessage({
+            type = 'music:particleEffectsState',
+            data = {
+                stationId = stationId,
+                state = stationParticleEffects[stationId]
+            }
+        })
+    end
+end)
+
+-- Receive particle effects updates from server
+RegisterNetEvent('pickle_dj:particleEffectsUpdated', function(stationId, effect, value)
+    if not stationParticleEffects[stationId] then
+        stationParticleEffects[stationId] = {
+            smoke = false,
+            fire = false,
+        }
+    end
+    
+    if effect == "smoke" then
+        stationParticleEffects[stationId].smoke = value == true
+    elseif effect == "fire" then
+        stationParticleEffects[stationId].fire = value == true
+    end
+    
+    -- Send to NUI for UI updates
+    SendNUIMessage({
+        type = 'music:particleEffectsUpdated',
+        data = {
+            stationId = stationId,
+            effect = effect,
+            value = value == true
         }
     })
 end)
