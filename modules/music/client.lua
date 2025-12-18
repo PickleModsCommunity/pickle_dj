@@ -12,9 +12,18 @@ end)
 
 function UnregisterMusicInstance(id)
 	-- No need
+	if not LocalMusicInstances[id] then return end
+	LocalMusicInstances[id] = nil
 end
 
 function RegisterMusicInstance(id)
+	UnregisterMusicInstance(id)
+	local musicInstance = MusicInstances[id]
+	if not musicInstance then return end
+	LocalMusicInstances[id] = {interior = 0}
+	local tennis = CreateTennisBall(musicInstance.coords)
+	LocalMusicInstances[id].interior = GetInteriorFromEntity(tennis)
+	DeleteScriptObject(tennis)
 	-- No need
 end
 
@@ -232,6 +241,7 @@ CreateThread(function()
 		local pcoords = GetEntityCoords(ped)
 		local nearestId = nil
 		local nearestDist = 999999.0
+		local currentInterior = GetInteriorFromEntity(PlayerPedId())
 		for id, inst in pairs(MusicInstances) do
 			if inst and inst.streamId ~= nil and inst.broadcaster ~= nil then
 				-- choose the minimum distance to any speaker if present, else to booth coords
@@ -299,8 +309,6 @@ CreateThread(function()
 				-- 	CurrentListeningInstanceId = nil
 				-- 	-- ensure UI is stopped and volume/pan reset
 				-- 	SendNUIMessage({ type = 'music:rtc:broadcastStopped', payload = {} })
-				-- 	SendNUIMessage({ type = 'music:setVolume', payload = { volume = 0.0 } })
-				-- 	SendNUIMessage({ type = 'music:setPanning', payload = { pan = 0.0 } })
 				-- 	goto __after_listen_tick
 				-- end
 				CurrentListeningInstanceId = nearestId
@@ -373,19 +381,16 @@ CreateThread(function()
 				end
 			end
 			if maxVol > 1.0 then maxVol = 1.0 end
-			SendNUIMessage({
-				type = 'music:setVolume',
-				payload = { volume = maxVol }
-			})
 			local pan = 0.0
 			if totalWeight > 0.0001 then
 				pan = sumPan / totalWeight
 				if pan < -0.9 then pan = -0.9 end
 				if pan > 0.9 then pan = 0.9 end
 			end
+			local muffled = (LocalMusicInstances[nearestId]?.interior or 0) ~= currentInterior
 			SendNUIMessage({
-				type = 'music:setPanning',
-				payload = { pan = pan }
+				type = 'music:setAudioValues',
+				payload = { volume = maxVol * (muffled and 0.5 or 1.0), pan = pan, muffled = muffled }
 			})
 		else
 			if CurrentListeningInstanceId ~= nil then
@@ -396,12 +401,8 @@ CreateThread(function()
 					payload = {}
 				})
 				SendNUIMessage({
-					type = 'music:setVolume',
-					payload = { volume = 0.0 }
-				})
-				SendNUIMessage({
-					type = 'music:setPanning',
-					payload = { pan = 0.0 }
+					type = 'music:setAudioValues',
+					payload = { volume = 0, pan = 0, muffled = false }
 				})
 			end
 		end

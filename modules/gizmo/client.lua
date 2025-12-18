@@ -17,7 +17,7 @@ function StartMovement(prop, data)
                 heading = GetGameplayCamRot(2).z
                 SetEntityCoords(prop, coords.x, coords.y, coords.z)
                 if not data.keepRotation then
-                    SetEntityRotation(prop, 0, 0, heading, 2) 
+                    SetEntityRotation(prop, 0, 0, heading + (data.rotationOffset or 0.0), 2) 
                 end
             end
         end
@@ -45,12 +45,12 @@ function StartMovement(prop, data)
                 if IsControlPressed(1, 15) then
                     heading = heading + (1.0 * speedMode)
                     if heading > 360.0 then heading = (360.0 - heading) end
-                    SetEntityRotation(prop, 0.0, 0.0, heading, 2, true)
+                    SetEntityRotation(prop, 0.0, 0.0, heading + (data.rotationOffset or 0.0), 2, true)
                     hasSetHeading = true
                 elseif IsControlPressed(1, 14) then
                     heading = heading - (1.0 * speedMode)
                     if heading < 0.0 then heading = (360.0 + heading) end
-                    SetEntityRotation(prop, 0.0, 0.0, heading, 2, true)
+                    SetEntityRotation(prop, 0.0, 0.0, heading + (data.rotationOffset or 0.0), 2, true)
                     hasSetHeading = true
                 end
             end
@@ -92,7 +92,7 @@ function StartMovement(prop, data)
     end
     return {
         position = coords,
-        rotation = vector3(0.0, 0.0, heading),
+        rotation = vector3(0.0, 0.0, heading + (data.rotationOffset or 0.0)),
     }
 end
 

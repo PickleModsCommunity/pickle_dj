@@ -90,6 +90,7 @@ function RegisterDJStation(station, skipSync)
         prop = station.prop or nil,
         speakers = station.speakers or nil,
         lights = station.lights or nil,
+        smokemachines = station.smokemachines or nil,
     }
     if skipSync then return id end
     TriggerClientEvent('pickle_dj:registerDJStation', -1, id, station)
@@ -146,6 +147,7 @@ function LoadDJStationsFromDatabase()
                 local stationEntities = entitiesByStation[row.id] or {}
                 local speakers = stationEntities.speaker or nil
                 local lights = stationEntities.light or nil
+                local smokemachines = stationEntities.smokemachine or nil
                 
                 local streamId = CreateMusicInstance(row.name, coords, row.heading, speakers)
                 local gameId = RegisterDJStation({
@@ -155,6 +157,7 @@ function LoadDJStationsFromDatabase()
                     prop = tonumber(row.prop),
                     speakers = speakers,
                     lights = lights,
+                    smokemachines = smokemachines,
                     streamId = streamId,
                 }, true)
                 -- Store mapping
@@ -390,6 +393,7 @@ function SaveEntityToStation(source, dbId, gameId, entityType, entityData)
                     -- Update station with new entities
                     station.speakers = entitiesByType.speaker or station.speakers
                     station.lights = entitiesByType.light or station.lights
+                    station.smokemachines = entitiesByType.smokemachine or station.smokemachines
                     
                     -- Update music instance if speakers changed
                     if station.streamId and entityType == "speaker" then
@@ -483,6 +487,7 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
                         if station then
                             station.speakers = entitiesByType.speaker or nil
                             station.lights = entitiesByType.light or nil
+                            station.smokemachines = entitiesByType.smokemachine or nil
                             
                             -- Update music instance if speakers changed
                             if station.streamId and results[1].entity_type == "speaker" then
@@ -593,6 +598,80 @@ RegisterNetEvent('pickle_dj:updateAllLightControls', function(stationId, propert
     end
 end)
 
+-- Callback to check if player can access DJ controller
+lib.callback.register('pickle_dj:canAccessController', function(source, stationId)
+    local station = DJStations[stationId]
+    if not station or not station.streamId then
+        return false, "Station not found"
+    end
+    
+    -- Get the music instance for this station
+    local musicInstanceId = station.streamId
+    local MusicInstances = exports['pickle_clubs']:GetMusicInstances() or {}
+    local inst = MusicInstances[musicInstanceId]
+    if not inst then
+        return false, "Music instance not found"
+    end
+    
+    -- If player is already broadcasting on this exact table, allow access
+    if inst.broadcaster == source and inst.streamId ~= nil then
+        return true
+    end
+    
+    -- Only allow one broadcaster per instance; don't allow takeover if another player is broadcasting and in range
+    if inst.broadcaster ~= nil and inst.broadcaster ~= source then
+        -- Another player is already broadcasting, check if they're still valid
+        local broadcasterPed = GetPlayerPed(inst.broadcaster)
+        if broadcasterPed and broadcasterPed ~= 0 then
+            -- Broadcaster is still connected, check if they're in range
+            local broadcasterCoords = GetEntityCoords(broadcasterPed)
+            if broadcasterCoords and broadcasterCoords.x ~= 0.0 then
+                local inRange = false
+                -- Check if broadcaster is in range of any speaker
+                if inst.speakers and type(inst.speakers) == "table" and #inst.speakers > 0 then
+                    for _, sp in ipairs(inst.speakers) do
+                        if sp.coords then
+                            local spec = (Config and Config.SpeakerProps and sp.speakerType and Config.SpeakerProps[sp.speakerType]) or nil
+                            local r = (spec and spec.soundRadius) or 0.0
+                            if r > 0.0 then
+                                local d = #(broadcasterCoords - sp.coords)
+                                if d <= r then
+                                    inRange = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                elseif inst.coords then
+                    -- Fallback to controller coords with default radius
+                    local controllerRadius = Config.MusicRadius or 50.0
+                    local d = #(broadcasterCoords - inst.coords)
+                    if d <= controllerRadius then
+                        inRange = true
+                    end
+                end
+                
+                if inRange then
+                    -- Broadcaster is still in range, deny the request
+                    return false, "Another player is already controlling this DJ station"
+                else
+                    -- Broadcaster is out of range, allow takeover
+                    return true
+                end
+            else
+                -- Invalid coords, allow takeover
+                return true
+            end
+        else
+            -- Broadcaster is no longer connected, allow takeover
+            return true
+        end
+    end
+    
+    -- No broadcaster or player is allowed, return true
+    return true
+end)
+
 -- Handle DJ controller opening - automatically assign broadcaster
 RegisterNetEvent('pickle_dj:openController', function(stationId)
     local source = source
@@ -637,10 +716,60 @@ RegisterNetEvent('pickle_dj:openController', function(stationId)
         end
     end
     
-    -- Only allow one broadcaster per instance; replace if same src, ignore if different and already active
+    -- Only allow one broadcaster per instance; don't allow takeover if another player is broadcasting and in range
     if inst.broadcaster ~= nil and inst.broadcaster ~= source then
-        -- Another player is already broadcasting, don't replace them
-        return
+        -- Another player is already broadcasting, check if they're still valid
+        local broadcasterPed = GetPlayerPed(inst.broadcaster)
+        if broadcasterPed and broadcasterPed ~= 0 then
+            -- Broadcaster is still connected, check if they're in range
+            local broadcasterCoords = GetEntityCoords(broadcasterPed)
+            if broadcasterCoords and broadcasterCoords.x ~= 0.0 then
+                local inRange = false
+                -- Check if broadcaster is in range of any speaker
+                if inst.speakers and type(inst.speakers) == "table" and #inst.speakers > 0 then
+                    for _, sp in ipairs(inst.speakers) do
+                        if sp.coords then
+                            local spec = (Config and Config.SpeakerProps and sp.speakerType and Config.SpeakerProps[sp.speakerType]) or nil
+                            local r = (spec and spec.soundRadius) or 0.0
+                            if r > 0.0 then
+                                local d = #(broadcasterCoords - sp.coords)
+                                if d <= r then
+                                    inRange = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                elseif inst.coords then
+                    -- Fallback to controller coords with default radius
+                    local controllerRadius = Config.MusicRadius or 50.0
+                    local d = #(broadcasterCoords - inst.coords)
+                    if d <= controllerRadius then
+                        inRange = true
+                    end
+                end
+                
+                if inRange then
+                    -- Broadcaster is still in range, deny the request (shouldn't happen if callback worked correctly, but keep as safety check)
+                    print(("[pickle_dj] Player %s tried to take over DJ station %s, but player %s is already broadcasting and in range"):format(source, stationId, inst.broadcaster))
+                    return
+                else
+                    -- Broadcaster is out of range, clean them up and allow takeover
+                    print(("[pickle_dj] Player %s taking over DJ station %s from out-of-range broadcaster %s (cleaning up)"):format(source, stationId, inst.broadcaster))
+                    inst.broadcaster = nil
+                    inst.streamId = nil
+                    TriggerClientEvent("music:musicInstanceUpdated", -1, musicInstanceId, inst)
+                    TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
+                    TriggerClientEvent('pickle_dj:stopBroadcasting', broadcasterSrc)
+                end
+            else
+                -- Invalid coords, allow takeover
+                print(("[pickle_dj] Player %s taking over DJ station %s from broadcaster %s with invalid coords"):format(source, stationId, inst.broadcaster))
+            end
+        else
+            -- Broadcaster is no longer connected, allow takeover
+            print(("[pickle_dj] Player %s taking over DJ station %s from disconnected broadcaster %s"):format(source, stationId, inst.broadcaster))
+        end
     end
     
     -- Generate streamId for this broadcaster

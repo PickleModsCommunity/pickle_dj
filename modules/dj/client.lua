@@ -45,6 +45,11 @@ function UnregisterDJStation(id)
                     DeleteScriptObject(lightData.entity)
                 end
             end
+            for _, smokeMachineData in ipairs(LocalDJStations[id].entityData.smokemachines or {}) do
+                if smokeMachineData.entity and DoesEntityExist(smokeMachineData.entity) then
+                    DeleteScriptObject(smokeMachineData.entity)
+                end
+            end
         end
         for k,v in pairs(LocalDJStations[id].vfxEntities) do
             DeleteScriptObject(v.lightProp)
@@ -76,6 +81,7 @@ local function RenderDJStationProps(id)
         LocalDJStations[id].entityData = {
             speakers = {},
             lights = {},
+            smokemachines = {},
             other = {}
         }
     end
@@ -146,6 +152,7 @@ local function RenderDJStationProps(id)
                 local ent = CreateProp(model, light.coords.x, light.coords.y, light.coords.z, false, true, false)
                 SetEntityCoordsNoOffset(ent, light.coords.x, light.coords.y, light.coords.z, 0.0, 0.0, 0.0)
                 local rot = spec and spec.rotation or vector3(0.0, 0.0, 0.0)
+                SetEntityCollision(ent, false, false)
                 SetEntityRotation(ent, rot.x, rot.y, light.heading + rot.z, 2, true)
                 FreezeEntityPosition(ent, true)
                 lightData.entity = ent
@@ -154,6 +161,36 @@ local function RenderDJStationProps(id)
             end
         end
     end
+    
+    -- Spawn configured smoke machines for this station
+    if station.smokemachines and type(station.smokemachines) == "table" then
+        for i, smokeMachine in ipairs(station.smokemachines) do
+            -- Find or create smoke machine data entry
+            local smokeMachineData = nil
+            if LocalDJStations[id].entityData.smokemachines[i] then
+                smokeMachineData = LocalDJStations[id].entityData.smokemachines[i]
+            else
+                smokeMachineData = {
+                    entity = nil,
+                    dbId = smokeMachine.id,
+                    data = smokeMachine
+                }
+                table.insert(LocalDJStations[id].entityData.smokemachines, smokeMachineData)
+            end
+            
+            -- Only create entity if it doesn't exist
+            if not smokeMachineData.entity or not DoesEntityExist(smokeMachineData.entity) then
+                local model = smokeMachine.model or `ba_prop_club_smoke_machine`
+                local ent = CreateProp(model, smokeMachine.coords.x, smokeMachine.coords.y, smokeMachine.coords.z, false, true, false)
+                SetEntityCoordsNoOffset(ent, smokeMachine.coords.x, smokeMachine.coords.y, smokeMachine.coords.z, 0.0, 0.0, 0.0)
+                SetEntityCollision(ent, false, false)
+                SetEntityRotation(ent, 0.0, 0.0, smokeMachine.heading, 2, true)
+                FreezeEntityPosition(ent, true)
+                smokeMachineData.entity = ent
+            end
+        end
+    end
+    
     -- Keep old VFX system for backwards compatibility (auto-generated lights)
     LocalDJStations[id].vfxEntities = {}
 end
@@ -190,6 +227,12 @@ local function UnrenderDJStationProps(id)
             if lightData.entity and DoesEntityExist(lightData.entity) then
                 DeleteScriptObject(lightData.entity)
                 lightData.entity = nil
+            end
+        end
+        for _, smokeMachineData in ipairs(LocalDJStations[id].entityData.smokemachines or {}) do
+            if smokeMachineData.entity and DoesEntityExist(smokeMachineData.entity) then
+                DeleteScriptObject(smokeMachineData.entity)
+                smokeMachineData.entity = nil
             end
         end
     end
@@ -230,33 +273,46 @@ function RegisterDJStation(id)
                         description = 'Open the DJ controller for this station.',
                         icon = 'music',
                         onSelect = function()
-                            SetMusicController(station.streamId)
-                            CreateThread(function()
-                                -- Ensure props are rendered before opening controller
-                                if not LocalDJStations[id].entity or not DoesEntityExist(LocalDJStations[id].entity) then
-                                    RenderDJStationProps(id)
-                                    Wait(100) -- Give props time to spawn
+                            -- Check if player can access the controller before opening UI
+                            lib.callback('pickle_dj:canAccessController', false, function(canAccess, errorMessage)
+                                if not canAccess then
+                                    if errorMessage then
+                                        ShowNotification(errorMessage, "error")
+                                    else
+                                        ShowNotification("You cannot access this DJ controller", "error")
+                                    end
+                                    return
                                 end
-                                local coords = GetEntityCoords(LocalDJStations[id].entity) + vector3(0.0, 0.0, 2.0)
-                                coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * -1.0
-                                SetNuiFocus(true, true)
-                                CreateDJCamera()
-                                SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z,
-                                    -30.0, 0.0, station.heading + 0.0, 90.0, 
-                                    2000, 0, 0, 2
-                                )
-                                -- Request latest light controls state from server when opening controller
-                                -- This ensures we always have the correct state, even if client state is stale
-                                TriggerServerEvent('pickle_dj:requestLightControls', id)
-                                -- Notify server that player is opening controller (will auto-assign as broadcaster)
-                                TriggerServerEvent('pickle_dj:openController', id)
-                                SendNUIMessage({
-                                    type = 'music:setControllerVisible',
-                                    visible = true,
-                                    stationId = id,
-                                    streamId = station.streamId
-                                })
-                            end)
+                                
+                                -- Access granted, proceed with opening UI
+                                SetMusicController(station.streamId)
+                                CreateThread(function()
+                                    -- Ensure props are rendered before opening controller
+                                    if not LocalDJStations[id].entity or not DoesEntityExist(LocalDJStations[id].entity) then
+                                        RenderDJStationProps(id)
+                                        Wait(100) -- Give props time to spawn
+                                    end
+                                    local coords = GetEntityCoords(LocalDJStations[id].entity) + vector3(0.0, 0.0, 2.0)
+                                    coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * -1.0
+                                    SetNuiFocus(true, true)
+                                    CreateDJCamera()
+                                    SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z,
+                                        -30.0, 0.0, station.heading + 0.0, 90.0, 
+                                        2000, 0, 0, 2
+                                    )
+                                    -- Request latest light controls state from server when opening controller
+                                    -- This ensures we always have the correct state, even if client state is stale
+                                    TriggerServerEvent('pickle_dj:requestLightControls', id)
+                                    -- Notify server that player is opening controller (will auto-assign as broadcaster)
+                                    TriggerServerEvent('pickle_dj:openController', id)
+                                    SendNUIMessage({
+                                        type = 'music:setControllerVisible',
+                                        visible = true,
+                                        stationId = id,
+                                        streamId = station.streamId
+                                    })
+                                end)
+                            end, id)
                         end
                     },
                     { 
@@ -280,6 +336,7 @@ function RegisterDJStation(id)
     LocalDJStations[id].entityData = {
         speakers = {},
         lights = {},
+        smokemachines = {},
         other = {}
     }
     
@@ -316,6 +373,17 @@ function RegisterDJStation(id)
                 dbId = light.id,
                 color = theme.lights[light.data.lightType].color,
                 data = light
+            })
+        end
+    end
+    
+    -- Store smoke machine data for later rendering
+    if station.smokemachines and type(station.smokemachines) == "table" then
+        for _, smokeMachine in ipairs(station.smokemachines) do
+            table.insert(LocalDJStations[id].entityData.smokemachines, {
+                entity = nil, -- Will be created when rendered
+                dbId = smokeMachine.id,
+                data = smokeMachine
             })
         end
     end
@@ -547,6 +615,32 @@ CreateThread(function()
                     end
                 end
                 SetEntityRotation(light.entity, locRot + tilt, 0.0, (light.heading) + (locHz), 2, true)
+                ::continue::
+            end
+            for i=1, #station.entityData.smokemachines do
+                local smokeMachine = station.entityData.smokemachines[i]
+                if not smokeMachine.entity or not DoesEntityExist(smokeMachine.entity) then goto continue end
+                if not smokeMachine.smokeParticle then
+                    RequestNamedPtfxAsset("scr_ar_planes")
+                    while not HasNamedPtfxAssetLoaded("scr_ar_planes") do
+                        Citizen.Wait(0)
+                    end
+                    UseParticleFxAssetNextCall("scr_ar_planes")
+                    smokeMachine.smokeParticle = StartParticleFxLoopedOnEntity("scr_ar_trail_smoke", smokeMachine.entity, 0.0, -1.5, 0.0, 0.0, 90.0, -90.0, 0.5, false, false, false)
+                end
+                if not smokeMachine.flameParticle then
+                    RequestNamedPtfxAsset("core")
+                    while not HasNamedPtfxAssetLoaded("core") do
+                        Citizen.Wait(0)
+                    end
+                    UseParticleFxAssetNextCall("core")
+                    smokeMachine.flameParticle = StartParticleFxNonLoopedOnEntity("ent_sht_flame", smokeMachine.entity, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0, false, false, false)
+                    SetTimeout(7000, function()
+                        if not smokeMachine.flameParticle then return end
+                        RemoveParticleFx(smokeMachine.flameParticle, true)
+                        smokeMachine.flameParticle = nil
+                    end)
+                end
                 ::continue::
             end
             ::continue_station::
@@ -877,6 +971,11 @@ local EntityTypes = {
         label = "Light",
         icon = "lightbulb",
         defaultModel = `stg_blinder`,
+    },
+    smokemachine = {
+        label = "Smoke Machine",
+        icon = "cloud",
+        defaultModel = `ba_prop_club_smoke_machine`,
     }
 }
 
@@ -1075,6 +1174,7 @@ function StartEntityPlacement(stationId, entityType, variantKey)
         coords = GetEntityCoords(PlayerPedId()),
         rotation = vector3(0.0, 0.0, GetEntityHeading(PlayerPedId())),
         lightColor = {255, 255, 255},
+        rotationOffset = entityType == "smokemachine" and 180.0 or 0.0,
         enableCancel = true,
         deleteEntity = true
     })
@@ -1100,6 +1200,9 @@ function StartEntityPlacement(stationId, entityType, variantKey)
                 lightType = variantKey,
                 strobeModel = variantData.strobeModel
             }
+        elseif entityType == "smokemachine" then
+            -- Smoke machines don't need variant data
+            entityData.data = {}
         end
         
         -- Send to server
@@ -1170,6 +1273,25 @@ function OpenEntityRemoveMenu(stationId)
             onSelect = function()
                 if lightData.dbId then
                     TriggerServerEvent('pickle_dj:removeEntity', lightData.dbId)
+                else
+                    ShowNotification("Entity ID not found", "error")
+                end
+                SetTimeout(500, function()
+                    OpenEntityRemoveMenu(stationId)
+                end)
+            end
+        })
+    end
+    
+    -- Add smoke machines
+    for i, smokeMachineData in ipairs(localStation.entityData.smokemachines or {}) do
+        table.insert(options, {
+            title = "Smoke Machine #" .. (smokeMachineData.dbId or i),
+            description = "Remove this smoke machine",
+            icon = "cloud",
+            onSelect = function()
+                if smokeMachineData.dbId then
+                    TriggerServerEvent('pickle_dj:removeEntity', smokeMachineData.dbId)
                 else
                     ShowNotification("Entity ID not found", "error")
                 end

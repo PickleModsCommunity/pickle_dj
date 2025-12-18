@@ -12,6 +12,7 @@ export default function MusicPlayer() {
 	const streamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
 	const gainRef = useRef<GainNode | null>(null);
 	const pannerRef = useRef<StereoPannerNode | PannerNode | null>(null);
+	const biquadFilterRef = useRef<BiquadFilterNode | null>(null);
 	const broadcasterRef = useRef<number | null>(null);
 	const [isPlaying, setIsPlaying] = useState(false);
 
@@ -223,41 +224,96 @@ export default function MusicPlayer() {
 				try { audio.volume = 0.0; } catch {}
 			}
 			try { (streamSourceRef.current as any)?.disconnect?.(); } catch {}
+			try { (biquadFilterRef.current as any)?.disconnect?.(); } catch {}
 			try { (gainRef.current as any)?.disconnect?.(); } catch {}
 			try { (pannerRef.current as any)?.disconnect?.(); } catch {}
+			biquadFilterRef.current = null;
 		} catch {}
 		setIsPlaying(false);
 		closePc();
 	});
 
 	// Distance-based attenuation (volume control from client proximity loop)
-	useNuiEvent("music:setVolume", (msg: any) => {
+
+
+	useNuiEvent("music:setAudioValues", (msg: any) => {
 		const data = (msg && (msg.payload || msg.data)) || {};
 		const volRaw = typeof data.volume === "number" ? data.volume : null;
-		if (volRaw == null) return;
-		const vol = Math.max(0, Math.min(1, volRaw));
-		const audio = audioRef.current;
-		if (!audio) return;
-		try { audio.volume = vol; } catch {}
-		try { if (gainRef.current) gainRef.current.gain.value = vol; } catch {}
-	});
-
-	// Directional panning control from client proximity loop
-	useNuiEvent("music:setPanning", (msg: any) => {
-		const data = (msg && (msg.payload || msg.data)) || {};
 		const panRaw = typeof data.pan === "number" ? data.pan : null;
-		if (panRaw == null) return;
-		const pan = Math.max(-1, Math.min(1, panRaw));
-		try {
-			const p = pannerRef.current as any;
-			if (!p) return;
-			if (typeof p.pan?.setValueAtTime === "function" && audioCtxRef.current) {
-				p.pan.setValueAtTime(pan, audioCtxRef.current.currentTime);
-			} else if (typeof p.setPosition === "function") {
-				// map pan to x-axis [-1,1] at z=1
-				p.setPosition(pan, 0, 1);
+		const muffled = typeof data.muffled === "boolean" ? data.muffled : null;
+		if (volRaw != null) {
+			const vol = Math.max(0, Math.min(1, volRaw));
+			const audio = audioRef.current;
+			if (!audio) return;
+			try { audio.volume = vol; } catch {}
+			try { if (gainRef.current) gainRef.current.gain.value = vol; } catch {}
+		}
+		if (panRaw != null) {
+			const pan = Math.max(-1, Math.min(1, panRaw));
+			try {
+				const p = pannerRef.current as any;
+				if (!p) return;
+				if (typeof p.pan?.setValueAtTime === "function" && audioCtxRef.current) {
+					p.pan.setValueAtTime(pan, audioCtxRef.current.currentTime);
+				} else if (typeof p.setPosition === "function") {
+					// map pan to x-axis [-1,1] at z=1
+					p.setPosition(pan, 0, 1);
+				}
+			} catch {}
+		}
+		if (muffled != null) {
+			try {
+				const ctx = audioCtxRef.current;
+				if (!ctx) return;
+				const source = streamSourceRef.current;
+				if (!source) return;
+				const gain = gainRef.current;
+				if (!gain) return;
+				const panner = pannerRef.current;
+				if (!panner) return;
+
+				// If muffled, insert a lowpass filter node between source and gain
+				if (muffled) {
+					if (!biquadFilterRef.current) {
+						const filter = ctx.createBiquadFilter();
+						filter.type = "lowpass";
+						// Typical muffling: cutoff between 400hz and 1000hz for "in next room"
+						filter.frequency.setValueAtTime(700, ctx.currentTime);
+						filter.Q.setValueAtTime(1, ctx.currentTime);
+
+						// Disconnect existing chain: source -> gain
+						try { source.disconnect(); } catch {}
+						// Note: gain -> panner -> destination should remain connected
+
+						// Reconnect through filter: source -> filter -> gain
+						source.connect(filter);
+						filter.connect(gain);
+						// gain is already connected to panner -> destination from initial setup
+						biquadFilterRef.current = filter;
+					} else {
+						// Filter already exists, ensure cutoff is set
+						biquadFilterRef.current.frequency.setValueAtTime(700, ctx.currentTime);
+					}
+				} else {
+					// Remove filter if present
+					if (biquadFilterRef.current) {
+						const filter = biquadFilterRef.current;
+						
+						// Disconnect filter from chain
+						try { source.disconnect(); } catch {}
+						try { filter.disconnect(); } catch {}
+						// Note: gain -> panner -> destination should remain connected
+
+						// Reconnect without filter: source -> gain
+						source.connect(gain);
+						// gain is already connected to panner -> destination from initial setup
+						biquadFilterRef.current = null;
+					}
+				}
+			} catch (e) {
+				console.error("[MusicPlayer] error applying muffled effect:", e);
 			}
-		} catch {}
+		}
 	});
 
 	useEffect(() => {
