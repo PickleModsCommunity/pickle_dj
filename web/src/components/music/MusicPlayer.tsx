@@ -262,9 +262,9 @@ export default function MusicPlayer() {
 			} catch {}
 		}
 		if (muffled != null) {
-			try {
+		try {
 				const ctx = audioCtxRef.current;
-				if (!ctx) return;
+			if (!ctx) return;
 				const source = streamSourceRef.current;
 				if (!source) return;
 				const gain = gainRef.current;
@@ -272,14 +272,14 @@ export default function MusicPlayer() {
 				const panner = pannerRef.current;
 				if (!panner) return;
 
-				// If muffled, insert a lowpass filter node between source and gain
-				if (muffled) {
+			// If muffled, insert a lowpass filter node between source and gain
+			if (muffled) {
 					if (!biquadFilterRef.current) {
-						const filter = ctx.createBiquadFilter();
-						filter.type = "lowpass";
-						// Typical muffling: cutoff between 400hz and 1000hz for "in next room"
-						filter.frequency.setValueAtTime(700, ctx.currentTime);
-						filter.Q.setValueAtTime(1, ctx.currentTime);
+					const filter = ctx.createBiquadFilter();
+					filter.type = "lowpass";
+					// Typical muffling: cutoff between 400hz and 1000hz for "in next room"
+					filter.frequency.setValueAtTime(700, ctx.currentTime);
+					filter.Q.setValueAtTime(1, ctx.currentTime);
 
 						// Disconnect existing chain: source -> gain
 						try { source.disconnect(); } catch {}
@@ -290,12 +290,12 @@ export default function MusicPlayer() {
 						filter.connect(gain);
 						// gain is already connected to panner -> destination from initial setup
 						biquadFilterRef.current = filter;
-					} else {
+				} else {
 						// Filter already exists, ensure cutoff is set
 						biquadFilterRef.current.frequency.setValueAtTime(700, ctx.currentTime);
-					}
-				} else {
-					// Remove filter if present
+				}
+			} else {
+				// Remove filter if present
 					if (biquadFilterRef.current) {
 						const filter = biquadFilterRef.current;
 						
@@ -308,11 +308,11 @@ export default function MusicPlayer() {
 						source.connect(gain);
 						// gain is already connected to panner -> destination from initial setup
 						biquadFilterRef.current = null;
-					}
 				}
-			} catch (e) {
-				console.error("[MusicPlayer] error applying muffled effect:", e);
 			}
+		} catch (e) {
+			console.error("[MusicPlayer] error applying muffled effect:", e);
+		}
 		}
 	});
 

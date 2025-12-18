@@ -124,27 +124,7 @@ local function RenderDJStationProps(id)
         for i, light in ipairs(station.lights) do
             -- Find or create light data entry
             local lightData = nil
-            if LocalDJStations[id].entityData.lights[i] then
-                lightData = LocalDJStations[id].entityData.lights[i]
-            else
-                local theme = {
-                    lights = {
-                        ambient = { color = {255, 0, 0} },
-                        spotlight = { color = {0, 255, 0} },
-                        barlight = { color = {0, 0, 255} }
-                    }
-                }
-                lightData = {
-                    entity = nil,
-                    lightType = light.data.lightType,
-                    heading = light.heading,
-                    dbId = light.id,
-                    color = theme.lights[light.data.lightType].color,
-                    data = light
-                }
-                table.insert(LocalDJStations[id].entityData.lights, lightData)
-            end
-            
+            lightData = LocalDJStations[id].entityData.lights[i]
             -- Only create entity if it doesn't exist
             if not lightData.entity or not DoesEntityExist(lightData.entity) then
                 local spec = (Config.LightTypes and light.data.lightType and Config.LightTypes[light.data.lightType]) or nil
@@ -157,6 +137,7 @@ local function RenderDJStationProps(id)
                 FreezeEntityPosition(ent, true)
                 lightData.entity = ent
                 lightData.heading = light.heading + rot.z
+
                 SetObjectLightColor(ent, 1, lightData.color[1], lightData.color[2], lightData.color[3])
             end
         end
@@ -300,9 +281,33 @@ function RegisterDJStation(id)
                                         -30.0, 0.0, station.heading + 0.0, 90.0, 
                                         2000, 0, 0, 2
                                     )
-                                -- Request latest light controls state from server when opening controller
-                                -- This ensures we always have the correct state, even if client state is stale
-                                TriggerServerEvent('pickle_dj:requestLightControls', id)
+                                -- Light controls are now part of station data, so they're already available
+                                -- Send current light controls state to NUI
+                                if stationControls[id] then
+                                    local uiControls = {}
+                                    uiControls.speed = GetSpeedString(stationControls[id].speed or 2.0)
+                                    if stationControls[id].lights then
+                                        uiControls.lights = {}
+                                        for lightType, lightControl in pairs(stationControls[id].lights) do
+                                            uiControls.lights[lightType] = {
+                                                enabled = (lightControl.enabled ~= false),
+                                                rotateHorizontal = (lightControl.rotateHorizontal == true),
+                                                rotateVertical = (lightControl.rotateVertical == true),
+                                                flash = GetFlashString(lightControl.flash) or "off",
+                                                speed = GetSpeedString(lightControl.speed or 2.0),
+                                                primaryColor = lightControl.primaryColor or {255, 0, 0},
+                                                secondaryColor = lightControl.secondaryColor or {255, 100, 0}
+                                            }
+                                        end
+                                    end
+                                    SendNUIMessage({
+                                        type = 'music:lightControlsState',
+                                        data = {
+                                            stationId = id,
+                                            controls = uiControls
+                                        }
+                                    })
+                                end
                                 -- Request particle effects state
                                 TriggerServerEvent('pickle_dj:requestParticleEffects', id)
                                 -- Notify server that player is opening controller (will auto-assign as broadcaster)
@@ -335,6 +340,17 @@ function RegisterDJStation(id)
         speakerEntities = {},
 	}
     -- Initialize entity storage (but don't create props yet - render distance thread will handle that)
+    -- Preserve existing entities if they exist (for resource restarts)
+    local existingLights = {}
+    if LocalDJStations[id] and LocalDJStations[id].entityData and LocalDJStations[id].entityData.lights then
+        -- Create a map of existing lights by dbId to preserve their entities
+        for _, existingLight in ipairs(LocalDJStations[id].entityData.lights) do
+            if existingLight.dbId and existingLight.entity and DoesEntityExist(existingLight.entity) then
+                existingLights[existingLight.dbId] = existingLight
+            end
+        end
+    end
+    
     LocalDJStations[id].entityData = {
         speakers = {},
         lights = {},
@@ -355,27 +371,46 @@ function RegisterDJStation(id)
     
     if station.lights and type(station.lights) == "table" then
         for _, light in ipairs(station.lights) do
-            local theme = {
-                lights = {
-                    ambient = {
-                        color = {255, 0, 0},
-                    },
-                    spotlight = {
-                        color = {0, 255, 0},
-                    },
-                    barlight = {
-                        color = {0, 0, 255},
-                    }
-                }
+            -- Get color from server controls if available, otherwise use defaults
+            local defaultColors = {
+                ambient = {255, 0, 0},
+                spotlight = {0, 255, 0},
+                barlight = {0, 0, 255}
             }
-            table.insert(LocalDJStations[id].entityData.lights, {
-                entity = nil, -- Will be created when rendered
+            local lightColor = defaultColors[light.data.lightType] or {255, 255, 255}
+            
+            -- Try to get color from server controls based on colorSpec (now available from station data)
+            local controls = stationControls[id]
+            if controls and controls.lights and controls.lights[light.data.lightType] then
+                -- Check top-level colorSpec first (new format), then nested (old format)
+                local colorSpec = light.colorSpec or (light.data and light.data.colorSpec) or "primary"
+                if colorSpec == "secondary" and controls.lights[light.data.lightType].secondaryColor then
+                    lightColor = controls.lights[light.data.lightType].secondaryColor
+                elseif controls.lights[light.data.lightType].primaryColor then
+                    lightColor = controls.lights[light.data.lightType].primaryColor
+                end
+            end
+            
+            -- Preserve existing entity if it exists
+            local existingLight = existingLights[light.id]
+            local lightData = {
+                entity = existingLight and existingLight.entity or nil, -- Preserve existing entity
                 lightType = light.data.lightType,
                 heading = light.heading,
                 dbId = light.id,
-                color = theme.lights[light.data.lightType].color,
+                color = lightColor,
                 data = light
-            })
+            }
+            
+            -- If entity exists, update its color immediately
+            if lightData.entity and DoesEntityExist(lightData.entity) then
+                SetObjectLightColor(lightData.entity, 1, lightColor[1], lightColor[2], lightColor[3])
+                -- Set flag to ensure render loop processes it
+                if not updateLightColor[id] then updateLightColor[id] = {} end
+                updateLightColor[id][light.data.lightType] = true
+            end
+            
+            table.insert(LocalDJStations[id].entityData.lights, lightData)
         end
     end
     
@@ -411,6 +446,9 @@ local stationControls = {}
 -- Per-station particle effects (stationId -> effects)
 -- Effects are ONLY set from server, never initialized locally
 local stationParticleEffects = {}
+
+-- Track which light types need color updates (per station, per light type)
+local updateLightColor = {}
 
 -- Render distance thread - manages prop rendering based on distance
 CreateThread(function()
@@ -454,7 +492,7 @@ CreateThread(function()
     local ticks = 0
     while true do
         ticks = ticks + 1
-        local updateLightColor = {}
+        -- updateLightColor flags are set by event handlers and cleared after processing
         
         -- Process each station's controls separately
         for stationId, station in pairs(LocalDJStations) do
@@ -609,6 +647,26 @@ CreateThread(function()
                 if lightControls.rotateVertical then
                     locRot = rotState
                 end
+                -- Update light color from server controls if available (based on colorSpec)
+                -- Check top-level colorSpec first (new format), then nested (old format)
+                local colorSpec = (light.data and light.data.colorSpec) or (light.data and light.data.data and light.data.data.colorSpec) or "primary"
+                local colorToUse = nil
+                if colorSpec == "secondary" and lightControls.secondaryColor then
+                    colorToUse = lightControls.secondaryColor
+                elseif lightControls.primaryColor then
+                    colorToUse = lightControls.primaryColor
+                end
+                
+                if colorToUse then
+                    local newColor = {colorToUse[1], colorToUse[2], colorToUse[3]}
+                    -- Only update if color changed
+                    if light.color[1] ~= newColor[1] or light.color[2] ~= newColor[2] or light.color[3] ~= newColor[3] then
+                        light.color = newColor
+                        if not updateLightColor[stationId] then updateLightColor[stationId] = {} end
+                        updateLightColor[stationId][light.lightType] = true
+                    end
+                end
+                
                 if updateLightColor[stationId] and updateLightColor[stationId][light.lightType] then
                     if Config.LaggyButCoolLights then
                         if not visibleLights[stationId][light.lightType] then
@@ -686,12 +744,86 @@ RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
     if type(id) == 'table' then
         for id, station in pairs(id) do
             DJStations[id] = station
+            -- Store light controls from station data
+            if station.lightControls then
+                stationControls[id] = station.lightControls
+            end
             RegisterDJStation(id)
+            
+            -- Update existing lights' colors if they're already rendered (after RegisterDJStation has set them up)
+            if station.lightControls and station.lightControls.lights then
+                local localStation = LocalDJStations[id]
+                if localStation and localStation.entityData and localStation.entityData.lights then
+                    for _, lightData in ipairs(localStation.entityData.lights) do
+                        if lightData.entity and DoesEntityExist(lightData.entity) then
+                            local lightType = lightData.lightType
+                            local lightControls = station.lightControls.lights[lightType]
+                            if lightControls then
+                                -- Check top-level colorSpec first (new format), then nested (old format)
+                                local colorSpec = (lightData.data and lightData.data.colorSpec) or (lightData.data and lightData.data.data and lightData.data.data.colorSpec) or "primary"
+                                local colorToUse = nil
+                                
+                                if colorSpec == "secondary" and lightControls.secondaryColor then
+                                    colorToUse = lightControls.secondaryColor
+                                elseif lightControls.primaryColor then
+                                    colorToUse = lightControls.primaryColor
+                                end
+                                
+                                if colorToUse then
+                                    local newColor = {colorToUse[1], colorToUse[2], colorToUse[3]}
+                                    -- Update light color
+                                    lightData.color = newColor
+                                    SetObjectLightColor(lightData.entity, 1, newColor[1], newColor[2], newColor[3])
+                                    if not updateLightColor[id] then updateLightColor[id] = {} end
+                                    updateLightColor[id][lightType] = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
         end
         return
     end
     DJStations[id] = station
+    -- Store light controls from station data
+    if station.lightControls then
+        stationControls[id] = station.lightControls
+    end
     RegisterDJStation(id)
+    
+    -- Update existing lights' colors if they're already rendered (after RegisterDJStation has set them up)
+    if station.lightControls and station.lightControls.lights then
+        local localStation = LocalDJStations[id]
+        if localStation and localStation.entityData and localStation.entityData.lights then
+            for _, lightData in ipairs(localStation.entityData.lights) do
+                if lightData.entity and DoesEntityExist(lightData.entity) then
+                    local lightType = lightData.lightType
+                    local lightControls = station.lightControls.lights[lightType]
+                    if lightControls then
+                        -- Check top-level colorSpec first (new format), then nested (old format)
+                        local colorSpec = (lightData.data and lightData.data.colorSpec) or (lightData.data and lightData.data.data and lightData.data.data.colorSpec) or "primary"
+                        local colorToUse = nil
+                        
+                        if colorSpec == "secondary" and lightControls.secondaryColor then
+                            colorToUse = lightControls.secondaryColor
+                        elseif lightControls.primaryColor then
+                            colorToUse = lightControls.primaryColor
+                        end
+                        
+                        if colorToUse then
+                            local newColor = {colorToUse[1], colorToUse[2], colorToUse[3]}
+                            -- Update light color
+                            lightData.color = newColor
+                            SetObjectLightColor(lightData.entity, 1, newColor[1], newColor[2], newColor[3])
+                            if not updateLightColor[id] then updateLightColor[id] = {} end
+                            updateLightColor[id][lightType] = true
+                        end
+                    end
+                end
+            end
+        end
+    end
     
     -- If viewing entities for this station, refresh view
     if viewingEntities and viewingStationId == id then
@@ -834,12 +966,69 @@ RegisterNetEvent('pickle_dj:lightControlsUpdated', function(stationId, lightType
     -- Store exactly what server sends - no mapping or conversion
     stationControls[stationId].lights[lightType][property] = value
     
+    -- Update light colors if color property changed
+    if property == "primaryColor" or property == "secondaryColor" then
+        -- Ensure value is a table with 3 elements
+        if type(value) == "table" and #value == 3 then
+            -- Update all lights of this type with the new color
+            local station = LocalDJStations[stationId]
+            if station and station.entityData and station.entityData.lights then
+                for _, lightData in ipairs(station.entityData.lights) do
+                    if lightData.lightType == lightType and lightData.entity and DoesEntityExist(lightData.entity) then
+                        -- Determine which color to use based on entity's colorSpec
+                        -- Check top-level colorSpec first (new format), then nested (old format)
+                        local colorSpec = (lightData.data and lightData.data.colorSpec) or (lightData.data and lightData.data.data and lightData.data.data.colorSpec) or "primary"
+                        local colorToUse = {value[1], value[2], value[3]}
+                    if property == "primaryColor" then
+                        if colorSpec == "primary" then
+                            lightData.color = {value[1], value[2], value[3]}
+                            colorToUse = {value[1], value[2], value[3]}
+                        else
+                            -- This light uses secondary, so use secondary color instead
+                            local secondaryColor = stationControls[stationId].lights[lightType].secondaryColor
+                            if secondaryColor and type(secondaryColor) == "table" and #secondaryColor == 3 then
+                                colorToUse = {secondaryColor[1], secondaryColor[2], secondaryColor[3]}
+                            else
+                                colorToUse = {255, 100, 0}
+                            end
+                        end
+                    elseif property == "secondaryColor" then
+                        if colorSpec == "secondary" then
+                            lightData.color = {value[1], value[2], value[3]}
+                            colorToUse = {value[1], value[2], value[3]}
+                        else
+                            -- This light uses primary, so use primary color instead
+                            local primaryColor = stationControls[stationId].lights[lightType].primaryColor
+                            if primaryColor and type(primaryColor) == "table" and #primaryColor == 3 then
+                                colorToUse = {primaryColor[1], primaryColor[2], primaryColor[3]}
+                            else
+                                colorToUse = {255, 0, 0}
+                            end
+                        end
+                    end
+                        -- Set flag to update color in render loop
+                        if not updateLightColor[stationId] then updateLightColor[stationId] = {} end
+                        updateLightColor[stationId][lightType] = true
+                        SetObjectLightColor(lightData.entity, 1, colorToUse[1], colorToUse[2], colorToUse[3])
+                    end
+                end
+            end
+        end
+    end
+    
     -- Convert flash/speed number to string for UI using shared function
     local uiValue = value
     if property == "flash" then
         uiValue = GetFlashString(value)
     elseif property == "speed" then
         uiValue = GetSpeedString(value)
+    elseif property == "primaryColor" or property == "secondaryColor" then
+        -- Colors are arrays, send as-is (ensure it's a table)
+        if type(value) == "table" and #value == 3 then
+            uiValue = {value[1], value[2], value[3]}
+        else
+            uiValue = value
+        end
     end
     
     -- Send to NUI for UI updates
@@ -898,10 +1087,41 @@ RegisterNetEvent('pickle_dj:particleEffectsUpdated', function(stationId, effect,
     })
 end)
 
--- Receive initial control state when opening controller
+-- Receive initial control state when opening controller (kept for backwards compatibility)
 RegisterNetEvent('pickle_dj:lightControlsState', function(stationId, controlsData)
     if controlsData then
         stationControls[stationId] = controlsData
+        
+        -- Update existing lights' colors based on their colorSpec
+        local station = LocalDJStations[stationId]
+        if station and station.entityData and station.entityData.lights and controlsData.lights then
+            for _, lightData in ipairs(station.entityData.lights) do
+                if lightData.entity and DoesEntityExist(lightData.entity) then
+                    local lightType = lightData.lightType
+                    local lightControls = controlsData.lights[lightType]
+                    if lightControls then
+                        -- Check top-level colorSpec first (new format), then nested (old format)
+                        local colorSpec = (lightData.data and lightData.data.colorSpec) or (lightData.data and lightData.data.data and lightData.data.data.colorSpec) or "primary"
+                        local colorToUse = nil
+                        
+                        if colorSpec == "secondary" and lightControls.secondaryColor then
+                            colorToUse = lightControls.secondaryColor
+                        elseif lightControls.primaryColor then
+                            colorToUse = lightControls.primaryColor
+                        end
+                        
+                        if colorToUse then
+                            local newColor = {colorToUse[1], colorToUse[2], colorToUse[3]}
+                            -- Update light color
+                            lightData.color = newColor
+                            if not updateLightColor[stationId] then updateLightColor[stationId] = {} end
+                            updateLightColor[stationId][lightType] = true
+                        end
+                    end
+                end
+            end
+        end
+        
         -- Convert flash numeric values to strings for UI (deep copy with conversion)
         local uiControls = {}
         uiControls.speed = GetSpeedString(controlsData.speed or 2.0)
@@ -914,7 +1134,9 @@ RegisterNetEvent('pickle_dj:lightControlsState', function(stationId, controlsDat
                     rotateHorizontal = (lightControl.rotateHorizontal == true), -- explicit true check
                     rotateVertical = (lightControl.rotateVertical == true), -- explicit true check
                     flash = GetFlashString(lightControl.flash) or "off",
-                    speed = GetSpeedString(lightControl.speed or 2.0)
+                    speed = GetSpeedString(lightControl.speed or 2.0),
+                    primaryColor = lightControl.primaryColor or {255, 0, 0},
+                    secondaryColor = lightControl.secondaryColor or {255, 100, 0}
                 }
             end
         end
@@ -1121,6 +1343,14 @@ function OpenEntityManagementMenu(stationId)
                 icon = "trash",
                 onSelect = function()
                     OpenEntityRemoveMenu(stationId)
+                end
+            },
+            {
+                title = "Manage Light Colors",
+                description = "Set individual lights to use primary or secondary color",
+                icon = "palette",
+                onSelect = function()
+                    OpenLightColorMenu(stationId)
                 end
             }
         }
@@ -1407,6 +1637,84 @@ function OpenEntityRemoveMenu(stationId)
         options = options
     })
     lib.showContext('dj_entity_remove_' .. stationId)
+end
+
+-- Open light color management menu
+function OpenLightColorMenu(stationId)
+    local localStation = LocalDJStations[stationId]
+    if not localStation or not localStation.entityData then
+        ShowNotification("No entities found", "error")
+        return
+    end
+    
+    local options = {}
+    
+    -- Add lights
+    for i, lightData in ipairs(localStation.entityData.lights or {}) do
+        local variantLabel = "Light"
+        if Config.LightTypes and Config.LightTypes[lightData.lightType] then
+            variantLabel = Config.LightTypes[lightData.lightType].label or lightData.lightType
+        end
+        
+        -- Get current color spec (default to "primary" if not set)
+        -- Check both top-level colorSpec (new format) and nested data.colorSpec (old format)
+        local currentColorSpec = "primary"
+        if lightData.data then
+            -- Check top-level colorSpec first (extracted by server)
+            if lightData.data.colorSpec then
+                currentColorSpec = lightData.data.colorSpec
+            -- Fallback to nested data.colorSpec
+            elseif lightData.data.data and lightData.data.data.colorSpec then
+                currentColorSpec = lightData.data.data.colorSpec
+            end
+        end
+        
+        local colorSpecLabel = currentColorSpec == "primary" and "Primary" or "Secondary"
+        local oppositeColorSpec = currentColorSpec == "primary" and "secondary" or "primary"
+        
+        table.insert(options, {
+            title = variantLabel .. " #" .. (lightData.dbId or i),
+            description = "Color: " .. colorSpecLabel .. " (Click to switch to " .. (oppositeColorSpec == "primary" and "Primary" or "Secondary") .. ")",
+            icon = currentColorSpec == "primary" and "circle" or "circle-dot",
+            onSelect = function()
+                if lightData.dbId then
+                    -- Toggle color spec
+                    local newColorSpec = oppositeColorSpec
+                    TriggerServerEvent('pickle_dj:updateEntityColorSpec', lightData.dbId, newColorSpec)
+                    -- Update local data immediately for responsive UI
+                    if lightData.data then
+                        -- Update top-level colorSpec (preferred)
+                        lightData.data.colorSpec = newColorSpec
+                        -- Also update nested data.colorSpec for consistency
+                        if lightData.data.data then
+                            lightData.data.data.colorSpec = newColorSpec
+                        end
+                    else
+                        lightData.data = { colorSpec = newColorSpec, data = { colorSpec = newColorSpec } }
+                    end
+                    -- Refresh menu to show updated state
+                    SetTimeout(100, function()
+                        OpenLightColorMenu(stationId)
+                    end)
+                else
+                    ShowNotification("Entity ID not found", "error")
+                end
+            end
+        })
+    end
+    
+    if #options == 0 then
+        ShowNotification("No lights found", "info")
+        return
+    end
+    
+    lib.registerContext({
+        id = 'dj_light_color_' .. stationId,
+        title = "Manage Light Colors",
+        menu = 'dj_entity_manage_' .. stationId,
+        options = options
+    })
+    lib.showContext('dj_light_color_' .. stationId)
 end
 
 -- Update entity data when station is updated

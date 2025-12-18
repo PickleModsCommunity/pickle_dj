@@ -1865,32 +1865,7 @@ export default function MusicController() {
                     if (deck === "controls") {
                         return (
                             <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", justifyContent: "center"  }}>
-                                <div className="mixerRow" style={{ gap: 24, justifyContent: "center" }}>
-                                    <div className="vGroup h-full">
-                                        <RangeControl
-                                            orientation="vertical"
-                                            barStyle={{
-                                                left: "-96.5px",
-                                                width: "193px",
-                                            }}
-                                            label="Right"
-                                            valueText={"Left"}
-                                            min={0}
-                                            max={100}
-                                            step={1}
-                                            value={Math.round(crossfade * 100)}
-                                            onChange={(v) => setCrossfade(v / 100)}
-                                            ariaLabel="Crossfader"
-                                        />
-                                        <button
-                                            className="resetBtn"
-                                            onClick={() => setCrossfade(0.5)}
-                                            aria-label="Reset crossfader"
-                                            title="Reset crossfader"
-                                        >
-                                            ↺
-                                        </button>
-                                    </div>
+                                <div className="mixerRow" style={{ gap: 24, justifyContent: "space-between", width: "100%" }}>
                                     <div className="vGroup h-full">
                                         <RangeControl
                                             orientation="vertical"
@@ -1928,8 +1903,30 @@ export default function MusicController() {
                                         <LightControls lightType="ambient" label="Ambient" stationId={currentStationId} />
                                         <LightControls lightType="spotlight" label="Spotlight" stationId={currentStationId} />
                                         <LightControls lightType="barlight" label="Bar Light" stationId={currentStationId} />
-                                        <ParticleEffectsControls stationId={currentStationId} />
                                     </div>
+                                    <ParticleEffectsControls stationId={currentStationId} />
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6, width: "100%", justifyContent: "center", marginTop: 8 }}>
+                                    <span style={{ fontSize: 12, color: "#ddd", paddingRight: 8, textAlign: "left" }}>Left</span>
+                                    <RangeControl
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={Math.round(crossfade * 100)}
+                                        onChange={(v) => setCrossfade(v / 100)}
+                                        ariaLabel="Balance"
+                                        style={{ flex: 1, maxWidth: 400 }}
+                                        className="!w-full"
+                                    />
+                                    <span style={{ fontSize: 12, color: "#ddd", paddingLeft: 8, textAlign: "right" }}>Right</span>
+                                    <button
+                                        className="resetBtn"
+                                        onClick={() => setCrossfade(0.5)}
+                                        aria-label="Reset balance"
+                                        title="Reset balance"
+                                    >
+                                        ↺
+                                    </button>
                                 </div>
                                  <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
                                     <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6, width: "100%" }}>

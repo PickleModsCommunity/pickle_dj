@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { fetchNui } from "@/providers/nui/fetchNui";
 import { useNuiEvent } from "../../providers/nui/useNui";
 
@@ -12,6 +12,8 @@ interface LightControlState {
     rotateVertical: boolean;
     flash: FlashSetting;
     speed: SpeedSetting;
+    primaryColor: [number, number, number]; // RGB
+    secondaryColor: [number, number, number]; // RGB
 }
 
 interface LightControlsProps {
@@ -31,14 +33,34 @@ function flashNumberToString(flash: number): FlashSetting {
 }
 
 export default function LightControls({ lightType, label, stationId, initialState }: LightControlsProps) {
+    const defaultState: LightControlState = {
+        enabled: true,
+        rotateHorizontal: true,
+        rotateVertical: false,
+        flash: "low",
+        speed: "normal",
+        primaryColor: [255, 0, 0],
+        secondaryColor: [255, 100, 0],
+    };
+    
     const [state, setState] = useState<LightControlState>(
-        initialState || {
-            enabled: true,
-            rotateHorizontal: true,
-            rotateVertical: false,
-            flash: "low",
-        }
+        initialState ? {
+            ...defaultState,
+            ...initialState,
+            primaryColor: initialState.primaryColor || defaultState.primaryColor,
+            secondaryColor: initialState.secondaryColor || defaultState.secondaryColor,
+        } : defaultState
     );
+    
+    const [isColorDialogOpen, setIsColorDialogOpen] = useState(false);
+    const [pendingColors, setPendingColors] = useState<{
+        primaryColor?: [number, number, number];
+        secondaryColor?: [number, number, number];
+    }>({});
+    const [dialogInitialColors, setDialogInitialColors] = useState<{
+        primaryColor: [number, number, number];
+        secondaryColor: [number, number, number];
+    } | null>(null);
 
     // Listen for initial state from server
     useNuiEvent("music:lightControlsState", (event: any) => {
@@ -67,12 +89,22 @@ export default function LightControls({ lightType, label, stationId, initialStat
                 ? lightControl.speed as SpeedSetting 
                 : "normal";
             
+            // Handle colors (defaults if not present)
+            const primaryColor: [number, number, number] = Array.isArray(lightControl.primaryColor) && lightControl.primaryColor.length === 3
+                ? [lightControl.primaryColor[0], lightControl.primaryColor[1], lightControl.primaryColor[2]]
+                : [255, 0, 0];
+            const secondaryColor: [number, number, number] = Array.isArray(lightControl.secondaryColor) && lightControl.secondaryColor.length === 3
+                ? [lightControl.secondaryColor[0], lightControl.secondaryColor[1], lightControl.secondaryColor[2]]
+                : [255, 100, 0];
+            
             setState({
                 enabled: enabled,
                 rotateHorizontal: rotateHorizontal,
                 rotateVertical: rotateVertical,
                 flash: flashValue,
                 speed: speedValue,
+                primaryColor: primaryColor,
+                secondaryColor: secondaryColor,
             });
         }
     });
@@ -95,11 +127,15 @@ export default function LightControls({ lightType, label, stationId, initialStat
                 if (data.value === "slow" || data.value === "normal" || data.value === "fast") {
                     setState(prev => ({ ...prev, speed: data.value as SpeedSetting }));
                 }
+            } else if (data.property === "primaryColor" || data.property === "secondaryColor") {
+                if (Array.isArray(data.value) && data.value.length === 3) {
+                    setState(prev => ({ ...prev, [data.property]: [data.value[0], data.value[1], data.value[2]] }));
+                }
             }
         }
     });
 
-    const updateControl = async (property: keyof LightControlState, value: boolean | FlashSetting | SpeedSetting) => {
+    const updateControl = async (property: keyof LightControlState, value: boolean | FlashSetting | SpeedSetting | [number, number, number]) => {
         if (!stationId) return;
         
         // Only send update to server - don't update state optimistically
@@ -110,6 +146,56 @@ export default function LightControls({ lightType, label, stationId, initialStat
             property,
             value,
         });
+    };
+
+    const updateColor = (colorType: "primaryColor" | "secondaryColor", color: [number, number, number]) => {
+        // Optimistically update UI for immediate feedback
+        setState(prev => ({ ...prev, [colorType]: color }));
+        // Store pending change (will be sent when dialog closes)
+        setPendingColors(prev => ({ ...prev, [colorType]: color }));
+    };
+
+    const handleDialogClose = async () => {
+        // Send only colors that actually changed
+        if (dialogInitialColors) {
+            // Check primary color
+            const currentPrimary = pendingColors.primaryColor || state.primaryColor;
+            const primaryChanged = currentPrimary[0] !== dialogInitialColors.primaryColor[0] ||
+                                  currentPrimary[1] !== dialogInitialColors.primaryColor[1] ||
+                                  currentPrimary[2] !== dialogInitialColors.primaryColor[2];
+            if (primaryChanged) {
+                await updateControl("primaryColor", currentPrimary);
+            }
+            
+            // Check secondary color
+            const currentSecondary = pendingColors.secondaryColor || state.secondaryColor;
+            const secondaryChanged = currentSecondary[0] !== dialogInitialColors.secondaryColor[0] ||
+                                    currentSecondary[1] !== dialogInitialColors.secondaryColor[1] ||
+                                    currentSecondary[2] !== dialogInitialColors.secondaryColor[2];
+            if (secondaryChanged) {
+                await updateControl("secondaryColor", currentSecondary);
+            }
+        }
+        // Clear pending colors and initial colors, then close dialog
+        setPendingColors({});
+        setDialogInitialColors(null);
+        setIsColorDialogOpen(false);
+    };
+
+    const rgbToHex = (r: number, g: number, b: number): string => {
+        return "#" + [r, g, b].map(x => {
+            const hex = Math.round(x).toString(16);
+            return hex.length === 1 ? "0" + hex : hex;
+        }).join("");
+    };
+
+    const hexToRgb = (hex: string): [number, number, number] | null => {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? [
+            parseInt(result[1], 16),
+            parseInt(result[2], 16),
+            parseInt(result[3], 16)
+        ] : null;
     };
 
     const cycleFlash = () => {
@@ -400,6 +486,154 @@ export default function LightControls({ lightType, label, stationId, initialStat
                     {state.speed}
                 </span>
             </button>
+
+            {/* Color Control Button - Shows both primary and secondary colors */}
+            <button
+                onClick={() => {
+                    // Store initial colors and reset pending colors when opening dialog
+                    setDialogInitialColors({
+                        primaryColor: [...state.primaryColor],
+                        secondaryColor: [...state.secondaryColor],
+                    });
+                    setPendingColors({});
+                    setIsColorDialogOpen(true);
+                }}
+                style={{
+                    width: 48,
+                    height: 48,
+                    border: "2px solid #555",
+                    borderRadius: 6,
+                    background: "#1e1e1e",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    transition: "all 120ms ease",
+                    padding: 2,
+                    position: "relative",
+                    overflow: "hidden",
+                }}
+                title="Edit Colors"
+                aria-label="Color controls"
+            >
+                {/* Split color display - left half primary, right half secondary */}
+                <div style={{
+                    width: "100%",
+                    height: "100%",
+                    display: "flex",
+                    borderRadius: 4,
+                    overflow: "hidden",
+                }}>
+                    <div
+                        style={{
+                            width: "50%",
+                            height: "100%",
+                            backgroundColor: rgbToHex(state.primaryColor[0], state.primaryColor[1], state.primaryColor[2]),
+                            borderRight: "1px solid rgba(255, 255, 255, 0.2)",
+                        }}
+                    />
+                    <div
+                        style={{
+                            width: "50%",
+                            height: "100%",
+                            backgroundColor: rgbToHex(state.secondaryColor[0], state.secondaryColor[1], state.secondaryColor[2]),
+                        }}
+                    />
+                </div>
+            </button>
+
+            {/* Color Selection Dialog */}
+            {isColorDialogOpen && (
+                <div className="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="color-dialog-title" onClick={(e) => {
+                    if (e.target === e.currentTarget) {
+                        handleDialogClose();
+                    }
+                }}>
+                    <div className="modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modalHeader">
+                            <h3 id="color-dialog-title" style={{ margin: 0, fontSize: 16 }}>Edit {label} Colors</h3>
+                            <button className="resetBtn" onClick={handleDialogClose} aria-label="Close color dialog">✕</button>
+                        </div>
+                        <div className="modalBody">
+                            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                                {/* Primary Color */}
+                                <div>
+                                    <div style={{ marginBottom: 8, opacity: 0.8, fontSize: 14 }}>Primary Color</div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                        <div
+                                            style={{
+                                                width: 60,
+                                                height: 60,
+                                                borderRadius: 6,
+                                                backgroundColor: rgbToHex(state.primaryColor[0], state.primaryColor[1], state.primaryColor[2]),
+                                                border: "2px solid #555",
+                                                flexShrink: 0,
+                                            }}
+                                        />
+                                        <input
+                                            type="color"
+                                            value={rgbToHex(state.primaryColor[0], state.primaryColor[1], state.primaryColor[2])}
+                                            onChange={(e) => {
+                                                const rgb = hexToRgb(e.target.value);
+                                                if (rgb) {
+                                                    updateColor("primaryColor", rgb);
+                                                }
+                                            }}
+                                            style={{
+                                                width: "100%",
+                                                height: 40,
+                                                cursor: "pointer",
+                                                border: "1px solid #333",
+                                                borderRadius: 6,
+                                                background: "#0c0c0c",
+                                            }}
+                                            aria-label="Primary color picker"
+                                        />
+                                    </div>
+                                </div>
+
+                                <hr className="divider" />
+
+                                {/* Secondary Color */}
+                                <div>
+                                    <div style={{ marginBottom: 8, opacity: 0.8, fontSize: 14 }}>Secondary Color</div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                        <div
+                                            style={{
+                                                width: 60,
+                                                height: 60,
+                                                borderRadius: 6,
+                                                backgroundColor: rgbToHex(state.secondaryColor[0], state.secondaryColor[1], state.secondaryColor[2]),
+                                                border: "2px solid #555",
+                                                flexShrink: 0,
+                                            }}
+                                        />
+                                        <input
+                                            type="color"
+                                            value={rgbToHex(state.secondaryColor[0], state.secondaryColor[1], state.secondaryColor[2])}
+                                            onChange={(e) => {
+                                                const rgb = hexToRgb(e.target.value);
+                                                if (rgb) {
+                                                    updateColor("secondaryColor", rgb);
+                                                }
+                                            }}
+                                            style={{
+                                                width: "100%",
+                                                height: 40,
+                                                cursor: "pointer",
+                                                border: "1px solid #333",
+                                                borderRadius: 6,
+                                                background: "#0c0c0c",
+                                            }}
+                                            aria-label="Secondary color picker"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

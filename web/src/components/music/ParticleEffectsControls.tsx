@@ -92,7 +92,7 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
         smokeWasHeldRef.current = false;
     };
 
-    const handleSmokeClick = (e: React.MouseEvent) => {
+    const handleSmokeClick = () => {
         // Only toggle if it was a quick click (not a hold)
         if (smokeClickAllowedRef.current) {
             updateEffect("smoke", !state.smoke);
@@ -133,7 +133,7 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
         fireWasHeldRef.current = false;
     };
 
-    const handleFireClick = (e: React.MouseEvent) => {
+    const handleFireClick = () => {
         // Only toggle if it was a quick click (not a hold)
         if (fireClickAllowedRef.current) {
             updateEffect("fire", !state.fire);
@@ -192,11 +192,10 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
                         strokeLinecap="round"
                         strokeLinejoin="round"
                     >
-                        <path d="M12 2C8 2 5 5 5 9c0 2 1 4 2 5v6c0 1.1.9 2 2 2h6c1.1 0 2-.9 2-2v-6c1-1 2-3 2-5 0-4-3-7-7-7z" />
-                        <path d="M8 12h8M10 8h4" opacity="0.6" />
-                        <circle cx="9" cy="15" r="1.5" fill="#60d394" opacity="0.4" />
-                        <circle cx="15" cy="15" r="1.5" fill="#60d394" opacity="0.4" />
-                        <path d="M8 18c1 1 2.5 1.5 4 1.5s3-.5 4-1.5" opacity="0.5" />
+                        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z" />
+                        <path d="M12 12v-1" opacity="0.6" />
+                        <path d="M10 11v-1" opacity="0.4" />
+                        <path d="M14 11v-1" opacity="0.4" />
                     </svg>
                 ) : (
                     <svg
@@ -209,9 +208,7 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
                         strokeLinecap="round"
                         strokeLinejoin="round"
                     >
-                        <path d="M12 2C8 2 5 5 5 9c0 2 1 4 2 5v6c0 1.1.9 2 2 2h6c1.1 0 2-.9 2-2v-6c1-1 2-3 2-5 0-4-3-7-7-7z" />
-                        <line x1="8" y1="12" x2="16" y2="12" stroke="#555" strokeWidth="1.5" />
-                        <line x1="10" y1="8" x2="14" y2="8" stroke="#555" strokeWidth="1.5" />
+                        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z" />
                     </svg>
                 )}
             </button>

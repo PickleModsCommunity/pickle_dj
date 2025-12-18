@@ -30,6 +30,8 @@ local function getStationLightControls(stationId)
                     rotateVertical = false,
                     flash = GetFlashValue("low"), -- low
                     speed = GetSpeedValue("normal"), -- normal = 2.0
+                    primaryColor = {255, 0, 0}, -- RGB: red
+                    secondaryColor = {255, 100, 0}, -- RGB: orange
                 },
                 spotlight = {
                     enabled = true,
@@ -37,6 +39,8 @@ local function getStationLightControls(stationId)
                     rotateVertical = false, 
                     flash = GetFlashValue("off"), -- off
                     speed = GetSpeedValue("normal"), -- normal = 2.0
+                    primaryColor = {0, 255, 0}, -- RGB: green
+                    secondaryColor = {0, 200, 255}, -- RGB: cyan
                 },
                 barlight = {
                     enabled = true,
@@ -44,6 +48,8 @@ local function getStationLightControls(stationId)
                     rotateVertical = true,
                     flash = GetFlashValue("low"), -- low
                     speed = GetSpeedValue("normal"), -- normal = 2.0
+                    primaryColor = {0, 0, 255}, -- RGB: blue
+                    secondaryColor = {255, 0, 255}, -- RGB: magenta
                 }
             }
         }
@@ -95,6 +101,16 @@ function RegisterDJStation(station, skipSync)
     repeat
         id = math.random(1, 1000000)
     until not DJStations[id]
+    
+    -- Initialize light controls from station data or get defaults
+    local lightControls = station.lightControls
+    if not lightControls then
+        lightControls = getStationLightControls(id)
+    else
+        -- Store the provided controls
+        StationLightControls[id] = lightControls
+    end
+    
     DJStations[id] = {
         name = station.name or "Unknown",
         coords = station.coords or vec3(0.0, 0.0, 0.0),
@@ -104,12 +120,22 @@ function RegisterDJStation(station, skipSync)
         speakers = station.speakers or nil,
         lights = station.lights or nil,
         smokemachines = station.smokemachines or nil,
+        lightControls = lightControls,
     }
     if skipSync then return id end
-    TriggerClientEvent('pickle_dj:registerDJStation', -1, id, station)
-    -- Send current light controls state for this station
-    local controls = getStationLightControls(id)
-    TriggerClientEvent('pickle_dj:lightControlsState', -1, id, controls)
+    
+    -- Include light controls in the station data sent to clients
+    local stationData = {
+        name = station.name,
+        coords = station.coords,
+        heading = station.heading,
+        prop = station.prop,
+        speakers = station.speakers,
+        lights = station.lights,
+        smokemachines = station.smokemachines,
+        lightControls = lightControls,
+    }
+    TriggerClientEvent('pickle_dj:registerDJStation', -1, id, stationData)
     return id
 end
 
@@ -117,7 +143,21 @@ end
 function LoadDJStationsFromDatabase()
     MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_stations`", {}, function(stationResults)
         if not stationResults or #stationResults == 0 then
-            TriggerClientEvent('pickle_dj:registerDJStation', -1, DJStations)
+            -- Sync all stations with light controls included
+            local stationsToSync = {}
+            for gameId, station in pairs(DJStations) do
+                stationsToSync[gameId] = {
+                    name = station.name,
+                    coords = station.coords,
+                    heading = station.heading,
+                    prop = station.prop,
+                    speakers = station.speakers,
+                    lights = station.lights,
+                    smokemachines = station.smokemachines,
+                    lightControls = station.lightControls or getStationLightControls(gameId),
+                }
+            end
+            TriggerClientEvent('pickle_dj:registerDJStation', -1, stationsToSync)
             return
         end
         
@@ -138,7 +178,7 @@ function LoadDJStationsFromDatabase()
                     local coords = vector3(coordsData.x, coordsData.y, coordsData.z)
                     local data = entity.data and json.decode(entity.data) or {}
                     
-                    table.insert(entitiesByStation[entity.station_id][entity.entity_type], {
+                    local entityObj = {
                         id = entity.id, -- Database ID for deletion
                         coords = coords,
                         heading = entity.heading,
@@ -147,7 +187,15 @@ function LoadDJStationsFromDatabase()
                         rotation = data.rotation,
                         soundOffset = data.soundOffset,
                         data = data
-                    })
+                    }
+                    
+                    -- Extract light-specific fields for easier access
+                    if entity.entity_type == "light" then
+                        entityObj.lightType = data.lightType
+                        entityObj.colorSpec = data.colorSpec
+                    end
+                    
+                    table.insert(entitiesByStation[entity.station_id][entity.entity_type], entityObj)
                 end
             end
             
@@ -163,6 +211,11 @@ function LoadDJStationsFromDatabase()
                 local smokemachines = stationEntities.smokemachine or nil
                 
                 local streamId = CreateMusicInstance(row.name, coords, row.heading, speakers)
+                
+                -- Get default light controls
+                local defaultLightControls = getStationLightControls(0) -- Use 0 as temp ID, will be replaced
+                
+                -- Register the station with default light controls
                 local gameId = RegisterDJStation({
                     name = row.name,
                     coords = coords,
@@ -171,6 +224,7 @@ function LoadDJStationsFromDatabase()
                     speakers = speakers,
                     lights = lights,
                     smokemachines = smokemachines,
+                    lightControls = defaultLightControls,
                     streamId = streamId,
                 }, true)
                 -- Store mapping
@@ -188,23 +242,27 @@ CreateThread(function()
     MySQL.ready(function()
         -- Load from database first
         LoadDJStationsFromDatabase()
-        TriggerClientEvent('pickle_dj:registerDJStation', -1, DJStations)
-        -- Send light controls state for all stations
-        for gameId, _ in pairs(DJStations) do
-            local controls = getStationLightControls(gameId)
-            TriggerClientEvent('pickle_dj:lightControlsState', -1, gameId, controls)
-        end
+        -- Sync all stations with light controls included (LoadDJStationsFromDatabase will handle the sync)
     end)
 end)
 
 RegisterServerEvent('pickle_dj:requestDJStations', function()
     local source = source
-    TriggerClientEvent('pickle_dj:registerDJStation', source, DJStations)
-    -- Send light controls state for all stations to requesting client
-    for gameId, _ in pairs(DJStations) do
-        local controls = getStationLightControls(gameId)
-        TriggerClientEvent('pickle_dj:lightControlsState', source, gameId, controls)
+    -- Sync all stations with light controls included
+    local stationsToSync = {}
+    for gameId, station in pairs(DJStations) do
+        stationsToSync[gameId] = {
+            name = station.name,
+            coords = station.coords,
+            heading = station.heading,
+            prop = station.prop,
+            speakers = station.speakers,
+            lights = station.lights,
+            smokemachines = station.smokemachines,
+            lightControls = station.lightControls or getStationLightControls(gameId),
+        }
     end
+    TriggerClientEvent('pickle_dj:registerDJStation', source, stationsToSync)
 end)
 
 -- Admin permission check callback
@@ -314,6 +372,9 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
                     -- Create music instance
                     local streamId = CreateMusicInstance(stationData.name, stationData.coords, stationData.heading, stationData.speakers)
                     
+                    -- Get default light controls
+                    local lightControls = getStationLightControls(0) -- Use 0 as temp ID, will be replaced
+                    
                     -- Register the station
                     local id = RegisterDJStation({
                         name = stationData.name,
@@ -322,6 +383,7 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
                         prop = stationData.prop,
                         speakers = stationData.speakers,
                         lights = stationData.lights,
+                        lightControls = lightControls,
                         streamId = streamId,
                     }, false)
                     
@@ -413,8 +475,18 @@ function SaveEntityToStation(source, dbId, gameId, entityType, entityData)
                         UpdateMusicInstanceSpeakers(station.streamId, station.speakers)
                     end
                     
-                    -- Sync to all clients
-                    TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, station)
+                    -- Sync to all clients (include light controls)
+                    local stationData = {
+                        name = station.name,
+                        coords = station.coords,
+                        heading = station.heading,
+                        prop = station.prop,
+                        speakers = station.speakers,
+                        lights = station.lights,
+                        smokemachines = station.smokemachines,
+                        lightControls = station.lightControls or getStationLightControls(gameId),
+                    }
+                    TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
                     TriggerClientEvent('pickle_dj:notify', source, "Entity added successfully!", "success")
                 end)
             end
@@ -482,7 +554,7 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
                                 local coords = vector3(coordsData.x, coordsData.y, coordsData.z)
                                 local data = entity.data and json.decode(entity.data) or {}
                                 
-                                table.insert(entitiesByType[entity.entity_type], {
+                                local entityObj = {
                                     id = entity.id,
                                     coords = coords,
                                     heading = entity.heading,
@@ -491,7 +563,15 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
                                     rotation = data.rotation,
                                     soundOffset = data.soundOffset,
                                     data = data
-                                })
+                                }
+                                
+                                -- Extract light-specific fields for easier access
+                                if entity.entity_type == "light" then
+                                    entityObj.lightType = data.lightType
+                                    entityObj.colorSpec = data.colorSpec
+                                end
+                                
+                                table.insert(entitiesByType[entity.entity_type], entityObj)
                             end
                         end
                         
@@ -507,8 +587,18 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
                                 UpdateMusicInstanceSpeakers(station.streamId, station.speakers)
                             end
                             
-                            -- Sync to all clients
-                            TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, station)
+                            -- Sync to all clients (include light controls)
+                            local stationData = {
+                                name = station.name,
+                                coords = station.coords,
+                                heading = station.heading,
+                                prop = station.prop,
+                                speakers = station.speakers,
+                                lights = station.lights,
+                                smokemachines = station.smokemachines,
+                                lightControls = station.lightControls or getStationLightControls(gameId),
+                            }
+                            TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
                             TriggerClientEvent('pickle_dj:notify', source, "Entity removed successfully!", "success")
                         end
                     end)
@@ -517,6 +607,117 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
                 end
             else
                 TriggerClientEvent('pickle_dj:notify', source, "Failed to remove entity", "error")
+            end
+        end)
+    end)
+end)
+
+-- Update entity color spec
+RegisterNetEvent('pickle_dj:updateEntityColorSpec', function(entityId, colorSpec)
+    local source = source
+    
+    -- Check admin permission
+    if not IsPlayerAdmin(source) then
+        TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to manage DJ entities", "error")
+        return
+    end
+    
+    -- Validate colorSpec
+    if colorSpec ~= "primary" and colorSpec ~= "secondary" then
+        TriggerClientEvent('pickle_dj:notify', source, "Invalid color specification", "error")
+        return
+    end
+    
+    -- Get entity data
+    MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_entities` WHERE id = @id", {
+        ['@id'] = entityId
+    }, function(results)
+        if not results or #results == 0 then
+            TriggerClientEvent('pickle_dj:notify', source, "Entity not found", "error")
+            return
+        end
+        
+        local entity = results[1]
+        local data = entity.data and json.decode(entity.data) or {}
+        
+        -- Update colorSpec
+        data.colorSpec = colorSpec
+        
+        -- Save updated data
+        MySQL.Async.execute("UPDATE `pickle_dj_entities` SET data = @data WHERE id = @id", {
+            ['@data'] = json.encode(data),
+            ['@id'] = entityId
+        }, function(rowsChanged)
+            if rowsChanged > 0 then
+                -- Find the station this entity belongs to
+                local stationId = entity.station_id
+                local gameId = nil
+                -- Find gameId by looking up the database ID in StationDBMapping
+                for gId, dbId in pairs(StationDBMapping) do
+                    if dbId == stationId then
+                        gameId = gId
+                        break
+                    end
+                end
+                
+                if gameId then
+                    -- Reload entities for this station
+                    MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_entities` WHERE station_id = @station_id", {
+                        ['@station_id'] = stationId
+                    }, function(entityResults)
+                        local entitiesByType = {}
+                        if entityResults then
+                            for _, ent in ipairs(entityResults) do
+                                if not entitiesByType[ent.entity_type] then
+                                    entitiesByType[ent.entity_type] = {}
+                                end
+                                
+                                local coordsData = json.decode(ent.coords)
+                                local coords = vector3(coordsData.x, coordsData.y, coordsData.z)
+                                local entData = ent.data and json.decode(ent.data) or {}
+                                
+                                table.insert(entitiesByType[ent.entity_type], {
+                                    id = ent.id,
+                                    coords = coords,
+                                    heading = ent.heading,
+                                    model = ent.model and tonumber(ent.model) or nil,
+                                    speakerType = entData.speakerType,
+                                    rotation = entData.rotation,
+                                    soundOffset = entData.soundOffset,
+                                    lightType = entData.lightType,
+                                    colorSpec = entData.colorSpec,
+                                    data = entData
+                                })
+                            end
+                        end
+                        
+                        -- Update station
+                        local station = DJStations[gameId]
+                        if station then
+                            station.speakers = entitiesByType.speaker or nil
+                            station.lights = entitiesByType.light or nil
+                            station.smokemachines = entitiesByType.smokemachine or nil
+                            
+                            -- Sync to all clients (include light controls)
+                            local stationData = {
+                                name = station.name,
+                                coords = station.coords,
+                                heading = station.heading,
+                                prop = station.prop,
+                                speakers = station.speakers,
+                                lights = station.lights,
+                                smokemachines = station.smokemachines,
+                                lightControls = station.lightControls or getStationLightControls(gameId),
+                            }
+                            TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
+                            TriggerClientEvent('pickle_dj:notify', source, "Light color updated successfully!", "success")
+                        end
+                    end)
+                else
+                    TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+                end
+            else
+                TriggerClientEvent('pickle_dj:notify', source, "Failed to update entity", "error")
             end
         end)
     end)
@@ -559,6 +760,17 @@ RegisterNetEvent('pickle_dj:updateLightControls', function(stationId, lightType,
         if numericValue then
             controls.lights[lightType].speed = numericValue
         end
+    elseif property == "primaryColor" or property == "secondaryColor" then
+        -- Color is an array [r, g, b]
+        if type(value) == "table" and #value == 3 then
+            controls.lights[lightType][property] = {value[1], value[2], value[3]}
+            numericValue = value
+        end
+    end
+    
+    -- Update station data
+    if DJStations[stationId] then
+        DJStations[stationId].lightControls = controls
     end
     
     -- Network the update to all clients with the numeric value from server
@@ -604,10 +816,19 @@ RegisterNetEvent('pickle_dj:updateAllLightControls', function(stationId, propert
             end
         end
         
-        -- Network the update to all clients with the numeric value from server
-        TriggerClientEvent('pickle_dj:lightControlsUpdated', -1, stationId, lightType, property, numericValue)
-        
         ::continue_light::
+    end
+    
+    -- Update station data
+    if DJStations[stationId] then
+        DJStations[stationId].lightControls = controls
+    end
+    
+    -- Network the update to all clients for each light type
+    for _, lightType in ipairs(lightTypes) do
+        if controls.lights[lightType] then
+            TriggerClientEvent('pickle_dj:lightControlsUpdated', -1, stationId, lightType, property, numericValue)
+        end
     end
 end)
 
