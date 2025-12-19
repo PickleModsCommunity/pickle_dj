@@ -27,6 +27,7 @@ end
 
 function UnregisterDJStation(id)
     if LocalDJStations[id] then
+        DeleteInteraction(LocalDJStations[id].interact)
         DeleteScriptObject(LocalDJStations[id].entity)
         if LocalDJStations[id].speakerEntities then
             for _, ent in ipairs(LocalDJStations[id].speakerEntities) do
@@ -627,11 +628,23 @@ CreateThread(function()
         ticks = ticks + 1
         -- updateLightColor flags are set by event handlers and cleared after processing
         
+        local playerCoords = GetEntityCoords(PlayerPedId())
+        local renderDistance = Config.RenderDistance or 100.0
+        local hasNearbyStations = false
+        
         -- Process each station's controls separately
         for stationId, station in pairs(LocalDJStations) do
             -- Only process if we have controls from server
             local controls = stationControls[stationId]
             if not controls then goto continue_station end
+            
+            -- Check distance to station - skip if too far away
+            local stationData = DJStations[stationId]
+            if not stationData or not stationData.coords then goto continue_station end
+            local distance = #(playerCoords - stationData.coords)
+            if distance > renderDistance then goto continue_station end
+            
+            hasNearbyStations = true
             
             if not controls.lights then goto continue_station end
             
@@ -869,7 +882,12 @@ CreateThread(function()
             end
             ::continue_station::
         end
-        Wait(0)
+        -- Use longer wait time when no nearby stations to reduce CPU usage
+        if hasNearbyStations then
+            Wait(0)
+        else
+            Wait(1500) -- Check less frequently when no stations nearby
+        end
     end
 end)
 
@@ -1545,6 +1563,22 @@ RegisterCommand('createdj', function()
     end)
 end, false)
 
+RegisterCommand('managedj', function()
+    local closest = { dist = 999999, id = nil }
+    for id, station in pairs(DJStations) do
+        local dist = #(GetEntityCoords(PlayerPedId()) - station.coords)
+        if dist < closest.dist and dist < Config.RenderDistance then
+            closest.dist = dist
+            closest.id = id
+        end
+    end
+    if closest.id then
+        OpenEntityManagementMenu(closest.id)
+    else
+        ShowNotification("No DJ station found", "error")
+    end
+end, false)
+
 -- Entity Management System
 local isPlacingEntity = false
 local viewingEntities = false
@@ -1611,6 +1645,9 @@ function OpenEntityManagementMenu(stationId)
                 icon = "eye",
                 onSelect = function()
                     ToggleEntityViewing(stationId)
+                    SetTimeout(100, function()
+                        OpenEntityManagementMenu(stationId)
+                    end)
                 end
             },
             {
@@ -1968,13 +2005,13 @@ function OpenLightColorMenu(stationId)
                     else
                         lightData.data = { colorSpec = newColorSpec, data = { colorSpec = newColorSpec } }
                     end
-                    -- Refresh menu to show updated state
-                    SetTimeout(100, function()
-                        OpenLightColorMenu(stationId)
-                    end)
                 else
                     ShowNotification("Entity ID not found", "error")
                 end
+                -- Refresh menu to show updated state
+                SetTimeout(500, function()
+                    OpenLightColorMenu(stationId)
+                end)
             end
         })
     end
@@ -1998,5 +2035,40 @@ RegisterNetEvent('pickle_dj:entityUpdated', function(stationId)
     -- Reload the station
     if DJStations[stationId] then
         RegisterDJStation(stationId)
+    end
+end)
+
+-- Thread to draw entity labels when viewing entities
+CreateThread(function()
+    while true do
+        local waitTime = 1500        
+        if viewingEntities and viewingStationId then
+            waitTime = 0
+            local localStation = LocalDJStations[viewingStationId]
+            local station = DJStations[viewingStationId]
+            if not station or not station.coords then
+                viewingEntities = false
+                viewingStationId = nil
+            else
+                local pcoords = GetEntityCoords(PlayerPedId())
+                local distance = #(pcoords - station.coords)
+                if distance > Config.RenderDistance then
+                    viewingEntities = false
+                    viewingStationId = nil
+                elseif localStation and localStation.entityData then
+                    -- Draw speaker labels
+                    for k,v in pairs(localStation.entityData) do 
+                        for i, data in ipairs(v) do
+                            if data.entity and DoesEntityExist(data.entity) then
+                                local coords = GetEntityCoords(data.entity)
+                                local label = "#" .. (data.dbId or i)
+                                DrawText3D(coords.x, coords.y, coords.z + 0.5, label)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        Wait(waitTime)
     end
 end)

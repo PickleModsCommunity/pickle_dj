@@ -64,6 +64,7 @@ CreateThread(function()
         MySQL.Async.execute([[
             CREATE TABLE IF NOT EXISTS `pickle_dj_stations` (
                 `id` INT(11) NOT NULL AUTO_INCREMENT,
+                `identifier` VARCHAR(255),
                 `name` VARCHAR(255) NOT NULL,
                 `coords` TEXT NOT NULL,
                 `heading` FLOAT NOT NULL,
@@ -310,13 +311,14 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
     
     -- Insert station
     MySQL.Async.insert(
-        "INSERT INTO `pickle_dj_stations` (`name`, `coords`, `heading`, `prop`, `created_by`) VALUES (@name, @coords, @heading, @prop, @created_by)",
+        "INSERT INTO `pickle_dj_stations` (`name`, `coords`, `heading`, `prop`, `created_by`, `identifier`) VALUES (@name, @coords, @heading, @prop, @created_by, @identifier)",
         {
             ['@name'] = stationData.name,
             ['@coords'] = coordsJson,
             ['@heading'] = stationData.heading,
             ['@prop'] = tostring(stationData.prop),
-            ['@created_by'] = identifier
+            ['@created_by'] = identifier,
+            ['@identifier'] = identifier
         },
         function(stationInsertId)
             if not stationInsertId then

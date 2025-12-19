@@ -195,16 +195,6 @@ export default function MusicController() {
         t2.addEventListener("ended", onEnded2);
 
         let cancelled = false;
-        (async () => {
-            const [l, r] = await Promise.all([
-                analyzeBpmForUrl("/nui/audio/track_1.mp3"),
-                analyzeBpmForUrl("/nui/audio/track_2.mp3"),
-            ]);
-            if (!cancelled) {
-                if (l) setDecks(prev => ({ ...prev, track_1: { ...prev.track_1, baseBpm: l } }));
-                if (r) setDecks(prev => ({ ...prev, track_2: { ...prev.track_2, baseBpm: r } }));
-            }
-        })();
         return () => {
             t1.removeEventListener("loadedmetadata", onLoaded1);
             t2.removeEventListener("loadedmetadata", onLoaded2);
@@ -329,19 +319,13 @@ export default function MusicController() {
                     sourceType: "url" as const,
                     baseBpm: null,
                 });
-                
-                const initialTrack = key === 'track_1' 
-                    ? makeInitialItem("/nui/audio/track_1.mp3")
-                    : makeInitialItem("/nui/audio/track_2.mp3");
-                
                 updated[key] = {
                     ...deck,
                     isPlaying: false,
                     tempo: 1,
                     currentTime: 0,
                     deckVolume: 1,
-                    playlist: [initialTrack],
-                    currentItemId: initialTrack.id,
+                    playlist: [],
                 };
             }
             return updated;
@@ -778,6 +762,34 @@ export default function MusicController() {
         }
     };
 
+    const fetchYouTubeTitle = async (url: string): Promise<string | null> => {
+        try {
+            // Extract video ID from various YouTube URL formats
+            const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([A-Za-z0-9_-]{11})/);
+            if (!videoIdMatch || !videoIdMatch[1]) {
+                return null;
+            }
+            
+            // Use YouTube oEmbed API to get video title
+            const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+            const response = await fetch(oembedUrl);
+            
+            if (!response.ok) {
+                return null;
+            }
+            
+            const data = await response.json();
+            if (data && typeof data.title === "string" && data.title.trim().length > 0) {
+                return data.title.trim();
+            }
+            
+            return null;
+        } catch (error) {
+            console.error("Failed to fetch YouTube title:", error);
+            return null;
+        }
+    };
+
     const getNextPlaylistItemId = (deck: "track_1" | "track_2"): string | null => {
         const d = decksRef.current[deck];
         const list = d?.playlist || [];
@@ -796,6 +808,7 @@ export default function MusicController() {
     };
 
     const addYoutubeUrlToPlaylist = async (deck: string, url: string) => {
+        // Start with a placeholder title
         const item: PlaylistItem = {
             id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
             title: deriveTitleFromUrlOrName(url),
@@ -803,14 +816,31 @@ export default function MusicController() {
             sourceType: "youtube",
             baseBpm: null,
         };
+        
+        // Add item to playlist immediately with placeholder title
         setDecks(prev => {
             const list = prev[deck]?.playlist || [];
             return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
         });
+        
+        // Fetch the actual title and update it
+        const fetchedTitle = await fetchYouTubeTitle(url);
+        if (fetchedTitle) {
+            setDecks(prev => {
+                const pd = prev[deck];
+                if (!pd) return prev;
+                const list = pd.playlist || [];
+                const idx = list.findIndex(it => it.id === item.id);
+                if (idx === -1) return prev;
+                const nextList = [...list];
+                nextList[idx] = { ...nextList[idx], title: fetchedTitle };
+                return { ...prev, [deck]: { ...pd, playlist: nextList } };
+            });
+        }
     };
 
     const addUrlToPlaylist = async (deck: string, url: string) => {
-        if (url.includes("youtube.com")) {
+        if (url.includes("youtube.com") || url.includes("youtu.be")) {
             await addYoutubeUrlToPlaylist(deck, url);
             return;
         }
@@ -884,13 +914,15 @@ export default function MusicController() {
     			})();
     			ytIframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&controls=1&playsinline=1&enablejsapi=1&origin=${origin}`;
     			ytIframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
-    			ytIframe.width = "320";
-    			ytIframe.height = "180";
+    			ytIframe.width = "1";
+    			ytIframe.height = "1";
     			ytIframe.frameBorder = "0";
     			ytIframe.style.position = "absolute";
-    			ytIframe.style.zIndex = "1000";
-    			ytIframe.style.top = "10px";
-    			ytIframe.style.left = "10px";
+    			ytIframe.style.zIndex = "-1";
+    			ytIframe.style.top = "-9999px";
+    			ytIframe.style.left = "-9999px";
+    			ytIframe.style.opacity = "0";
+    			ytIframe.style.pointerEvents = "none";
     			ytIframe.id = `yt-iframe-${deck}`;
     			document.body.appendChild(ytIframe);
     			// Track ref for safe access / postMessage control
