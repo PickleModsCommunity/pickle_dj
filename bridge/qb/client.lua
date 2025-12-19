@@ -59,6 +59,7 @@ RegisterNetEvent(GetCurrentResourceName()..":showNotification", function(text)
 end)
 
 RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
+    TriggerServerEvent('pickle_dj:requestDJStations')
     TriggerServerEvent("pickle_dj:initializePlayer")
 end)
 

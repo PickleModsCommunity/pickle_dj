@@ -23,6 +23,7 @@ local firstLoad = true
 RegisterNetEvent('playerSpawned', function()
     if not firstLoad then return end
     firstLoad = false
+    TriggerServerEvent('pickle_dj:requestDJStations')
     TriggerServerEvent("pickle_dj:initializePlayer")
 end)
 

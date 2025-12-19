@@ -44,6 +44,7 @@ end)
 
 RegisterNetEvent('esx:playerLoaded')
 AddEventHandler('esx:playerLoaded',function(xPlayer, isNew, skin)
+    TriggerServerEvent('pickle_dj:requestDJStations')
     TriggerServerEvent("pickle_dj:initializePlayer")
 end)
 
