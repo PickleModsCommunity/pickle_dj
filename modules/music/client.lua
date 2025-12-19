@@ -295,8 +295,12 @@ CreateThread(function()
 			end
 			if __inRange then
 			wait = 0
+			local inst = MusicInstances[nearestId]
+			-- Check if we need to start/restart listening to this instance
+			local shouldStartListening = false
 			if CurrentListeningInstanceId ~= nearestId then
-				-- Switch to this instance
+				-- Switching to a different instance
+				shouldStartListening = true
 				if CurrentListeningInstanceId ~= nil then
 					debugPrint("[MSC] STOP BROADCAST", CurrentListeningInstanceId)
 					SendNUIMessage({
@@ -304,7 +308,29 @@ CreateThread(function()
 						payload = {}
 					})
 				end
-				local inst = MusicInstances[nearestId]
+			elseif CurrentListeningInstanceId == nearestId then
+				-- Same instance, but check if broadcaster exists or changed
+				if inst.broadcaster == nil then
+					-- Broadcast stopped, clear and wait for restart
+					CurrentListeningInstanceId = nil
+					debugPrint("[MSC] STOP BROADCAST (no broadcaster)", nearestId)
+					SendNUIMessage({
+						type = 'music:rtc:broadcastStopped',
+						payload = {}
+					})
+					shouldStartListening = false
+				else
+					-- Check if streamId changed (new broadcast started)
+					local lastStreamId = (inst._lastStreamId or nil)
+					if lastStreamId ~= inst.streamId then
+						-- Stream ID changed, restart listening
+						shouldStartListening = true
+						inst._lastStreamId = inst.streamId
+					end
+				end
+			end
+			
+			if shouldStartListening and inst.broadcaster ~= nil then
 				-- If I'm the broadcaster and DebugListen is false, do not start listening
 				-- local myId = GetPlayerServerId(PlayerId())
 				-- if inst.broadcaster == myId then
@@ -314,6 +340,7 @@ CreateThread(function()
 				-- 	goto __after_listen_tick
 				-- end
 				CurrentListeningInstanceId = nearestId
+				inst._lastStreamId = inst.streamId
 				debugPrint("[MSC] START BROADCAST", nearestId)
 				SendNUIMessage({
 					type = 'music:rtc:broadcastStarted',

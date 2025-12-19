@@ -387,8 +387,9 @@ export default function MusicController() {
             (window as any).__musicBroadcastStreamId = null;
         } catch {}
         
-        // Reset controller to default state
-        resetController();
+        // Note: We don't call resetController() here because we want to preserve
+        // the current setup (tracks, settings, etc.) when just stopping the broadcast.
+        // resetController() is only called when leaving the zone or closing the controller.
         
         // turn off mic if enabled
         try {
