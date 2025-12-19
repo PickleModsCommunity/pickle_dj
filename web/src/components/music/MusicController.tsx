@@ -387,9 +387,8 @@ export default function MusicController() {
             (window as any).__musicBroadcastStreamId = null;
         } catch {}
         
-        // Note: We don't call resetController() here because we want to preserve
-        // the current setup (tracks, settings, etc.) when just stopping the broadcast.
-        // resetController() is only called when leaving the zone or closing the controller.
+        // Reset controller to default state (clear playlists and reset settings)
+        resetController();
         
         // turn off mic if enabled
         try {
@@ -1902,31 +1901,6 @@ export default function MusicController() {
                     if (deck === "controls") {
                         return (
                             <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", justifyContent: "center"  }}>
-                                {isBroadcasting && (
-                                    <button
-                                        onClick={stopBroadcastAndClose}
-                                        style={{
-                                            background: "#dc2626",
-                                            color: "white",
-                                            border: "none",
-                                            borderRadius: "6px",
-                                            padding: "8px 16px",
-                                            cursor: "pointer",
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: "6px",
-                                            fontSize: "14px",
-                                            fontWeight: "500",
-                                            transition: "background 0.2s"
-                                        }}
-                                        onMouseEnter={(e) => e.currentTarget.style.background = "#b91c1c"}
-                                        onMouseLeave={(e) => e.currentTarget.style.background = "#dc2626"}
-                                        title="Stop broadcasting and close controller"
-                                    >
-                                        <Square className="w-4 h-4" />
-                                        Stop Broadcasting
-                                    </button>
-                                )}
                                 <div className="mixerRow" style={{ gap: 24, justifyContent: "space-between", width: "100%" }}>
                                     <div className="vGroup h-full">
                                         <RangeControl
@@ -1990,7 +1964,7 @@ export default function MusicController() {
                                         ↺
                                     </button>
                                 </div>
-                                 <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
                                     <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6, width: "100%" }}>
                                     <button
                                         className="resetBtn"
@@ -2023,6 +1997,31 @@ export default function MusicController() {
                                     </div>
                                     <HorizontalVu level={vuLevels.mic} />
                                 </div>
+                                <button
+                                    onClick={stopBroadcastAndClose}
+                                    style={{
+                                        background: "#dc2626",
+                                        color: "white",
+                                        border: "none",
+                                        borderRadius: "6px",
+                                        padding: "8px 16px",
+                                        cursor: "pointer",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "6px",
+                                        fontSize: "14px",
+                                        fontWeight: "500",
+                                        transition: "background 0.2s",
+                                        width: "100%",
+                                        justifyContent: "center",
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = "#b91c1c"}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = "#dc2626"}
+                                    title="Stop broadcasting and close controller"
+                                >
+                                    <Square className="w-4 h-4" />
+                                    Stop Broadcasting
+                                </button>
                             </div>
                         )
                     } else {
@@ -2125,10 +2124,14 @@ export default function MusicController() {
                                             <span>{formatTime(decks[deck].duration)}</span>
                                         </div>
                                         {/* (YouTube container removed) */}
-                                        <div className="controls h-[220px]" style={{ width: "100%", justifyContent: "center", gap: 24 }}>
+                                        <div className="controls h-[254px]" style={{ width: "100%", justifyContent: "center", gap: 24 }}>
                                             {deck === "track_2" && playlistCol}
                                             <div className="vGroup">
                                                 <RangeControl
+                                                    barStyle={{
+                                                        left: "-79.5px",
+                                                        width: "160px",
+                                                    }}
                                                     orientation="vertical"
                                                     min={50}
                                                     max={150}
@@ -2159,6 +2162,13 @@ export default function MusicController() {
                                             <div className="vGroup">
                                                 <RangeControl
                                                     orientation="vertical"
+                                                    barStyle={{
+                                                        left: "-86px",
+                                                        width: "160px",
+                                                    }}
+                                                    vuMeterStyle={{
+                                                        height: "162px",
+                                                    }}
                                                     min={0}
                                                     max={100}
                                                     step={1}

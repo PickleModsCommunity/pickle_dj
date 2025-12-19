@@ -275,7 +275,7 @@ function RegisterDJStation(id)
                                     -30.0, 0.0, station.heading + 0.0, 90.0, 
                                     2000, 0, 0, 2
                                 )
-                                PlayAnim(PlayerPedId(), "anim@amb@nightclub@djs@dixon@", "dixn_idle_cntr_b_dix", 1.0, -1.0, -1, 0, 0, false, false, false)
+                                PlayAnim(PlayerPedId(), "anim@amb@nightclub@djs@dixon@", "dixn_idle_cntr_b_dix", 1.0, -1.0, -1, 1, 1.0, false, false, false)
                                 end)
                                 
                                 -- Light controls are now part of station data, so they're already available
