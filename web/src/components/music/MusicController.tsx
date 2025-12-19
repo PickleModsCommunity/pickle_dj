@@ -78,8 +78,8 @@ export default function MusicController() {
 
     // Tempo and BPM states
     useEffect(() => {
-        const t1 = new Audio("/nui/audio/track_1.mp3");
-        const t2 = new Audio("/nui/audio/track_2.mp3");
+        const t1 = new Audio();
+        const t2 = new Audio();
         t1.loop = false;
         t2.loop = false;
         t1.preload = "auto";
@@ -102,9 +102,6 @@ export default function MusicController() {
             sourceType: "url" as const,
             baseBpm: null,
         });
-        const initial1 = makeInitialItem("/nui/audio/track_1.mp3");
-        const initial2 = makeInitialItem("/nui/audio/track_2.mp3");
-
         setDecks({
             track_1: {
                 audio: t1,
@@ -114,8 +111,8 @@ export default function MusicController() {
                 currentTime: 0,
                 duration: 0,
                 deckVolume: 1,
-                playlist: [initial1],
-                currentItemId: initial1.id,
+                playlist: [],
+                currentItemId: null,
             },
             track_2: {
                 audio: t2,
@@ -125,8 +122,8 @@ export default function MusicController() {
                 currentTime: 0,
                 duration: 0,
                 deckVolume: 1,
-                playlist: [initial2],
-                currentItemId: initial2.id,
+                playlist: [],
+                currentItemId: null,
             },
         });
 
@@ -247,7 +244,7 @@ export default function MusicController() {
             const fn = (window as any).GetParentResourceName;
             if (typeof fn === "function") return fn();
         } catch {}
-        return "pickle_clubs";
+        return "pickle_dj";
     };
     const nuiPost = async (name: string, data?: any) => {
         const resource = getParentResource();

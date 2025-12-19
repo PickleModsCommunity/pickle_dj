@@ -244,6 +244,7 @@ function RegisterDJStation(id)
 			label = station.name,
 			coords = station.coords,
 			heading = station.heading,
+            zOffset = -1.0,
 		}, function(selection, targetData)
             lib.registerContext({
                 id = 'dj_station_' .. id,
@@ -284,25 +285,24 @@ function RegisterDJStation(id)
                                     -30.0, 0.0, station.heading + 0.0, 90.0, 
                                     2000, 0, 0, 2
                                 )
+                                PlayAnim(PlayerPedId(), "anim@amb@nightclub@djs@dixon@", "dixn_idle_cntr_b_dix", 1.0, -1.0, -1, 0, 0, false, false, false)
                                 end)
                                 
                                 -- Light controls are now part of station data, so they're already available
                                 -- Send current light controls state to NUI
-                                print("^2[DJ Controller]^0 ===== OPENING CONTROLLER =====")
-                                print("^2[DJ Controller]^0 Station ID: " .. tostring(id))
-                                print("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "] exists: " .. tostring(stationControls[id] ~= nil))
+                                debugPrint("^2[DJ Controller]^0 ===== OPENING CONTROLLER =====")
+                                debugPrint("^2[DJ Controller]^0 Station ID: " .. tostring(id))
+                                debugPrint("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "] exists: " .. tostring(stationControls[id] ~= nil))
                                 
                                 -- Debug: Check all station IDs in stationControls
                                 local stationIds = {}
                                 for sid, _ in pairs(stationControls) do
                                     table.insert(stationIds, tostring(sid))
                                 end
-                                print("^2[DJ Controller]^0 Available station IDs in stationControls: " .. table.concat(stationIds, ", "))
+                                debugPrint("^2[DJ Controller]^0 Available station IDs in stationControls: " .. table.concat(stationIds, ", "))
                                 
-                                Citizen.Trace("^2[DJ Controller]^0 Opening controller for station " .. tostring(id) .. "\n")
                                 if stationControls[id] then
-                                    print("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "].lights exists: " .. tostring(stationControls[id].lights ~= nil))
-                                    Citizen.Trace("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "].lights exists: " .. tostring(stationControls[id].lights ~= nil) .. "\n")
+                                    debugPrint("^2[DJ Controller]^0 stationControls[" .. tostring(id) .. "].lights exists: " .. tostring(stationControls[id].lights ~= nil))
                                     local uiControls = {}
                                     uiControls.speed = GetSpeedString(stationControls[id].speed or 2.0)
                                     if stationControls[id].lights then
@@ -313,16 +313,16 @@ function RegisterDJStation(id)
                                             local secondaryColor = lightControl.secondaryColor
                                             
                                             -- Debug: Check what we're getting
-                                            print("^2[DJ Controller]^0 Light type: " .. tostring(lightType))
+                                            debugPrint("^2[DJ Controller]^0 Light type: " .. tostring(lightType))
                                             if primaryColor then
-                                                print("^2[DJ Controller]^0 primaryColor type: " .. type(primaryColor) .. ", value: [" .. tostring(primaryColor[1] or "nil") .. ", " .. tostring(primaryColor[2] or "nil") .. ", " .. tostring(primaryColor[3] or "nil") .. "]")
+                                                debugPrint("^2[DJ Controller]^0 primaryColor type: " .. type(primaryColor) .. ", value: [" .. tostring(primaryColor[1] or "nil") .. ", " .. tostring(primaryColor[2] or "nil") .. ", " .. tostring(primaryColor[3] or "nil") .. "]")
                                             else
-                                                print("^2[DJ Controller]^0 primaryColor is nil")
+                                                debugPrint("^2[DJ Controller]^0 primaryColor is nil")
                                             end
                                             if secondaryColor then
-                                                print("^2[DJ Controller]^0 secondaryColor type: " .. type(secondaryColor) .. ", value: [" .. tostring(secondaryColor[1] or "nil") .. ", " .. tostring(secondaryColor[2] or "nil") .. ", " .. tostring(secondaryColor[3] or "nil") .. "]")
+                                                debugPrint("^2[DJ Controller]^0 secondaryColor type: " .. type(secondaryColor) .. ", value: [" .. tostring(secondaryColor[1] or "nil") .. ", " .. tostring(secondaryColor[2] or "nil") .. ", " .. tostring(secondaryColor[3] or "nil") .. "]")
                                             else
-                                                print("^2[DJ Controller]^0 secondaryColor is nil")
+                                                debugPrint("^2[DJ Controller]^0 secondaryColor is nil")
                                             end
                                             
                                             -- Validate and normalize primary color
@@ -377,13 +377,13 @@ function RegisterDJStation(id)
                                                 end
                                             end
                                             
-                                            print("^2[DJ Controller]^0 Final colors for " .. lightType .. " - primary: [" .. primaryColor[1] .. ", " .. primaryColor[2] .. ", " .. primaryColor[3] .. "], secondary: [" .. secondaryColor[1] .. ", " .. secondaryColor[2] .. ", " .. secondaryColor[3] .. "]")
+                                            debugPrint("^2[DJ Controller]^0 Final colors for " .. lightType .. " - primary: [" .. primaryColor[1] .. ", " .. primaryColor[2] .. ", " .. primaryColor[3] .. "], secondary: [" .. secondaryColor[1] .. ", " .. secondaryColor[2] .. ", " .. secondaryColor[3] .. "]")
                                             
                                             -- Ensure colors are always arrays (defensive check)
                                             local finalPrimaryColor = primaryColor
                                             local finalSecondaryColor = secondaryColor
                                             if not finalPrimaryColor or type(finalPrimaryColor) ~= "table" or #finalPrimaryColor ~= 3 then
-                                                print("^1[DJ Controller]^0 ERROR: primaryColor invalid for " .. lightType .. ", using default")
+                                                debugPrint("^1[DJ Controller]^0 ERROR: primaryColor invalid for " .. lightType .. ", using default")
                                                 if lightType == "ambient" then
                                                     finalPrimaryColor = {255, 0, 0}
                                                 elseif lightType == "spotlight" then
@@ -395,7 +395,7 @@ function RegisterDJStation(id)
                                                 end
                                             end
                                             if not finalSecondaryColor or type(finalSecondaryColor) ~= "table" or #finalSecondaryColor ~= 3 then
-                                                print("^1[DJ Controller]^0 ERROR: secondaryColor invalid for " .. lightType .. ", using default")
+                                                debugPrint("^1[DJ Controller]^0 ERROR: secondaryColor invalid for " .. lightType .. ", using default")
                                                 if lightType == "ambient" then
                                                     finalSecondaryColor = {255, 100, 0}
                                                 elseif lightType == "spotlight" then
@@ -407,7 +407,7 @@ function RegisterDJStation(id)
                                                 end
                                             end
                                             
-                                            print("^2[DJ Controller]^0 Sending to NUI for " .. lightType .. " - primaryColor: [" .. finalPrimaryColor[1] .. ", " .. finalPrimaryColor[2] .. ", " .. finalPrimaryColor[3] .. "], secondaryColor: [" .. finalSecondaryColor[1] .. ", " .. finalSecondaryColor[2] .. ", " .. finalSecondaryColor[3] .. "]")
+                                            debugPrint("^2[DJ Controller]^0 Sending to NUI for " .. lightType .. " - primaryColor: [" .. finalPrimaryColor[1] .. ", " .. finalPrimaryColor[2] .. ", " .. finalPrimaryColor[3] .. "], secondaryColor: [" .. finalSecondaryColor[1] .. ", " .. finalSecondaryColor[2] .. ", " .. finalSecondaryColor[3] .. "]")
                                             
                                             uiControls.lights[lightType] = {
                                                 enabled = (lightControl.enabled ~= false),
@@ -420,9 +420,9 @@ function RegisterDJStation(id)
                                             }
                                         end
                                     else
-                                        print("^1[DJ Controller]^0 WARNING: stationControls[" .. tostring(id) .. "].lights is nil!")
+                                        debugPrint("^1[DJ Controller]^0 WARNING: stationControls[" .. tostring(id) .. "].lights is nil!")
                                     end
-                                    print("^2[DJ Controller]^0 Sending light controls to NUI...")
+                                    debugPrint("^2[DJ Controller]^0 Sending light controls to NUI...")
                                     -- Send setControllerVisible FIRST to set currentStationId, then send light controls
                                 SendNUIMessage({
                                     type = 'music:setControllerVisible',
@@ -441,11 +441,11 @@ function RegisterDJStation(id)
                                                 controls = uiControls
                                             }
                                         })
-                                        print("^2[DJ Controller]^0 Light controls sent to NUI (delayed)")
+                                        debugPrint("^2[DJ Controller]^0 Light controls sent to NUI (delayed)")
                                     end)
-                                    print("^2[DJ Controller]^0 Light controls queued to send")
+                                    debugPrint("^2[DJ Controller]^0 Light controls queued to send")
                                 else
-                                    print("^1[DJ Controller]^0 WARNING: stationControls[" .. tostring(id) .. "] is nil! Light controls not available.")
+                                    debugPrint("^1[DJ Controller]^0 WARNING: stationControls[" .. tostring(id) .. "] is nil! Light controls not available.")
                                 end
                                 
                                 -- Request particle effects state
@@ -858,7 +858,7 @@ CreateThread(function()
                         end
                     else
                         if smokeMachine.flameParticle then
-                            print("Removing flame particle")
+                            debugPrint("Removing flame particle")
                             StopParticleFxLooped(smokeMachine.flameParticle, false)
                             RemoveParticleFx(smokeMachine.flameParticle, true)
                             smokeMachine.flameParticle = nil
@@ -874,22 +874,21 @@ CreateThread(function()
 end)
 
 RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
-    print("^3[DJ Register]^0 Event received - id type: " .. type(id))
+    debugPrint("^3[DJ Register]^0 Event received - id type: " .. type(id))
     if type(id) == 'table' then
-        print("^3[DJ Register]^0 Processing bulk station sync - " .. tostring(table.count or "unknown") .. " stations")
+        debugPrint("^3[DJ Register]^0 Processing bulk station sync - " .. tostring(table.count or "unknown") .. " stations")
         for id, station in pairs(id) do
             DJStations[id] = station
             -- Store light controls from station data
             if station.lightControls then
-                print("^3[DJ Register]^0 Setting stationControls[" .. tostring(id) .. "] from station data")
-                Citizen.Trace("^3[DJ Register]^0 Setting stationControls[" .. tostring(id) .. "] from station data\n")
+                debugPrint("^3[DJ Register]^0 Setting stationControls[" .. tostring(id) .. "] from station data")
                 -- Deep copy the entire light controls structure to avoid reference issues
                 stationControls[id] = {
                     speed = station.lightControls.speed,
                     lights = {}
                 }
                 if station.lightControls.lights then
-                    print(string.format("[DJ Register] Found %d light types in station.lightControls.lights", 0)) -- Will count below
+                    debugPrint(string.format("[DJ Register] Found %d light types in station.lightControls.lights", 0)) -- Will count below
                     local count = 0
                     for lightType, lightControl in pairs(station.lightControls.lights) do
                         count = count + 1
@@ -899,12 +898,12 @@ RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
                             local r, g, b = lightControl.primaryColor[1], lightControl.primaryColor[2], lightControl.primaryColor[3]
                             if r ~= nil and g ~= nil and b ~= nil then
                                 primaryColor = {r, g, b}
-                                print(string.format("[DJ Register] %s primaryColor: [%d, %d, %d]", lightType, r, g, b))
+                                debugPrint(string.format("[DJ Register] %s primaryColor: [%d, %d, %d]", lightType, r, g, b))
                             else
-                                print(string.format("[DJ Register] %s primaryColor invalid: r=%s, g=%s, b=%s", lightType, tostring(r), tostring(g), tostring(b)))
+                                debugPrint(string.format("[DJ Register] %s primaryColor invalid: r=%s, g=%s, b=%s", lightType, tostring(r), tostring(g), tostring(b)))
                             end
                         else
-                            print(string.format("[DJ Register] %s primaryColor missing or wrong type: %s", lightType, type(lightControl.primaryColor)))
+                            debugPrint(string.format("[DJ Register] %s primaryColor missing or wrong type: %s", lightType, type(lightControl.primaryColor)))
                         end
                         
                         local secondaryColor = nil
@@ -912,12 +911,12 @@ RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
                             local r, g, b = lightControl.secondaryColor[1], lightControl.secondaryColor[2], lightControl.secondaryColor[3]
                             if r ~= nil and g ~= nil and b ~= nil then
                                 secondaryColor = {r, g, b}
-                                print(string.format("[DJ Register] %s secondaryColor: [%d, %d, %d]", lightType, r, g, b))
+                                debugPrint(string.format("[DJ Register] %s secondaryColor: [%d, %d, %d]", lightType, r, g, b))
                             else
-                                print(string.format("[DJ Register] %s secondaryColor invalid: r=%s, g=%s, b=%s", lightType, tostring(r), tostring(g), tostring(b)))
+                                debugPrint(string.format("[DJ Register] %s secondaryColor invalid: r=%s, g=%s, b=%s", lightType, tostring(r), tostring(g), tostring(b)))
                             end
                         else
-                            print(string.format("[DJ Register] %s secondaryColor missing or wrong type: %s", lightType, type(lightControl.secondaryColor)))
+                            debugPrint(string.format("[DJ Register] %s secondaryColor missing or wrong type: %s", lightType, type(lightControl.secondaryColor)))
                         end
                         
                         stationControls[id].lights[lightType] = {
@@ -930,12 +929,12 @@ RegisterNetEvent('pickle_dj:registerDJStation', function(id, station)
                             secondaryColor = secondaryColor
                         }
                     end
-                    print(string.format("[DJ Register] Processed %d light types for stationControls[%s]", count, id))
+                    debugPrint(string.format("[DJ Register] Processed %d light types for stationControls[%s]", count, id))
                 else
-                    print(string.format("[DJ Register] WARNING: station.lightControls.lights is nil for station %s", id))
+                    debugPrint(string.format("[DJ Register] WARNING: station.lightControls.lights is nil for station %s", id))
                 end
             else
-                print(string.format("[DJ Register] WARNING: station.lightControls is nil for station %s", id))
+                debugPrint(string.format("[DJ Register] WARNING: station.lightControls is nil for station %s", id))
             end
             RegisterDJStation(id)
             
@@ -1064,16 +1063,16 @@ end)
 -- Note: The music module also handles this event to set CurrentControlInstanceId
 -- We just forward it to NUI here
 RegisterNetEvent('pickle_dj:startBroadcasting', function(musicInstanceId, streamId)
-    print("[pickle_dj] Received startBroadcasting", musicInstanceId, streamId, type(musicInstanceId))
+    debugPrint("[pickle_dj] Received startBroadcasting", musicInstanceId, streamId, type(musicInstanceId))
     
     -- Validate that we have both instanceId and streamId before sending to NUI
     if not musicInstanceId or musicInstanceId == nil then
-        print("[pickle_dj] ERROR: Cannot start broadcast - musicInstanceId is nil")
+        debugPrint("[pickle_dj] ERROR: Cannot start broadcast - musicInstanceId is nil")
         return
     end
     
     if not streamId or streamId == nil then
-        print("[pickle_dj] ERROR: Cannot start broadcast - streamId is nil")
+        debugPrint("[pickle_dj] ERROR: Cannot start broadcast - streamId is nil")
         return
     end
     
@@ -1107,6 +1106,7 @@ end)
 RegisterNUICallback('setVisible', function(data, cb)
     if not data.visible then
         ExitDJCamera()
+        ClearPedTasks(PlayerPedId())
         -- Note: We don't stop broadcasting when controller closes
         -- Broadcasting continues until player leaves range of all speakers
     end
@@ -1508,7 +1508,6 @@ RegisterCommand('createdj', function()
         for k,v in pairs(Config.DJStations) do
             table.insert(options, {label = k, value = v.prop})
         end
-        print(json.encode(options))
         local input = lib.inputDialog('Create DJ Station', {
             {type = 'input', label = 'Station Name', description = 'Enter a name for this DJ station', required = true, min = 1, max = 50},
             {type = 'select', label = 'Prop', description = 'Select a prop for the DJ station', options = options, required = true, default = options[1].value}

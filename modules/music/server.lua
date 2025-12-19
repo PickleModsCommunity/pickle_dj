@@ -57,7 +57,7 @@ local function sendTurnConfigTo(targetSrc)
 					end
 				end
             else
-                print("Failed to get turn config", status, resp, respHeaders)
+                debugPrint("Failed to get turn config", status, resp, respHeaders)
 			end
 			if cfg == nil then
 				-- Fallback to Cloudflare STUN-only if token request fails
@@ -67,7 +67,7 @@ local function sendTurnConfigTo(targetSrc)
 					}
 				}
 			end
-            print("turn config", json.encode(cfg))
+            debugPrint("turn config", json.encode(cfg))
 			TriggerClientEvent('music:rtc:turnConfig', targetSrc, json.encode(cfg))
 		end, method, body, headers)
 		return
@@ -99,7 +99,7 @@ RegisterNetEvent('pickle_dj:updateMusicInstanceSpeakers', function(musicInstance
 	
 	-- Broadcast updated instance to all clients
 	TriggerClientEvent("music:musicInstanceUpdated", -1, musicInstanceId, instance)
-	print(("^2[music]^0 Updated speakers for instance %s"):format(musicInstanceId))
+	debugPrint(("^2[music]^0 Updated speakers for instance %s"):format(musicInstanceId))
 end)
 
 AddEventHandler('playerDropped', function()
@@ -122,35 +122,35 @@ RegisterNetEvent('music:rtc:requestTurnConfig', function()
 end)
 
 RegisterNetEvent('music:rtc:announceBroadcast', function(data, datalen)
-	print("announceBroadcast", data, datalen)
+	debugPrint("announceBroadcast", data, datalen)
 	local src = tonumber(source)
 	local payload = {}
 	do
 		local ok, parsed = pcall(function() return json.decode(data or "{}") end)
 		if ok and type(parsed) == "table" then payload = parsed end
 	end
-	print("[music] announceBroadcast payload:", json.encode(payload))
+	debugPrint("[music] announceBroadcast payload:", json.encode(payload))
 	local instanceId = tonumber(payload.instanceId or -1)
 	if instanceId == nil or MusicInstances[instanceId] == nil then
-		print("[music] announceBroadcast invalid instanceId", payload.instanceId, "type:", type(payload.instanceId))
-		print("[music] Available instances:", json.encode(MusicInstances))
+		debugPrint("[music] announceBroadcast invalid instanceId", payload.instanceId, "type:", type(payload.instanceId))
+		debugPrint("[music] Available instances:", json.encode(MusicInstances))
 		return
 	end
 	local inst = MusicInstances[instanceId]
 	-- Only allow one broadcaster per instance; replace if same src, ignore if different and already active
 	if inst.broadcaster ~= nil and inst.broadcaster ~= src then
-		print(("[music] instance %s already broadcasting by %s; reject %s"):format(instanceId, inst.broadcaster, src))
+		debugPrint(("[music] instance %s already broadcasting by %s; reject %s"):format(instanceId, inst.broadcaster, src))
 		return
 	end
 	-- Use provided streamId (from auto-broadcast) or use existing one, or generate one
 	local streamId = payload.streamId or inst.streamId or tostring(src) .. "_" .. tostring(math.random(100000, 999999))
 	inst.broadcaster = src
 	inst.streamId = streamId
-	print(("[music] instance %s broadcast announced by %s streamId=%s"):format(instanceId, src, streamId))
+	debugPrint(("[music] instance %s broadcast announced by %s streamId=%s"):format(instanceId, src, streamId))
 	-- Push updated instance to clients
 	TriggerClientEvent("music:musicInstanceUpdated", -1, instanceId, inst)
 	-- legacy: notify broadcast started (clients may use proximity and ignore)
-	TriggerClientEvent('music:rtc:broadcastStarted', -1, json.encode({ streamId = streamId, broadcaster = src }))
+	-- TriggerClientEvent('music:rtc:broadcastStarted', -1, json.encode({ streamId = streamId, broadcaster = src }))
 end)
 
 RegisterNetEvent('music:rtc:stopBroadcast', function()
@@ -160,7 +160,7 @@ RegisterNetEvent('music:rtc:stopBroadcast', function()
 		if inst.broadcaster ~= nil and inst.broadcaster == src then
 			inst.broadcaster = nil
 			inst.streamId = nil
-			print(("[music] instance %s broadcast stopped by %s"):format(id, src))
+			debugPrint(("[music] instance %s broadcast stopped by %s"):format(id, src))
 			TriggerClientEvent("music:musicInstanceUpdated", -1, id, inst)
 			-- legacy
 			TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
@@ -181,7 +181,7 @@ RegisterNetEvent('music:rtc:offer', function(data, datalen)
 	local inst = MusicInstances[instanceId]
 	if inst.broadcaster == nil then return end
 	-- Forward listener offer to the instance broadcaster
-	print(("[music] offer (inst %s) from %s -> broadcaster %s, sdpLen=%s"):format(instanceId, src, inst.broadcaster, tostring(datalen)))
+	debugPrint(("[music] offer (inst %s) from %s -> broadcaster %s, sdpLen=%s"):format(instanceId, src, inst.broadcaster, tostring(datalen)))
 	TriggerClientEvent('music:rtc:offer', inst.broadcaster, json.encode({ instanceId = instanceId, from = src, sdp = payload.sdp or "" }))
 end)
 
@@ -199,7 +199,7 @@ RegisterNetEvent('music:rtc:answer', function(targetId, sdp)
 		end
 	end
 	if not broadcasterInstanceId then return end
-	print(("[music] answer (inst %s) from broadcaster %s -> %s, sdpLen=%s"):format(broadcasterInstanceId, src, toId, tostring(#(sdp or ""))))
+	debugPrint(("[music] answer (inst %s) from broadcaster %s -> %s, sdpLen=%s"):format(broadcasterInstanceId, src, toId, tostring(#(sdp or ""))))
 	TriggerClientEvent('music:rtc:answer', toId, json.encode({ instanceId = broadcasterInstanceId, sdp = sdp }))
 end)
 
@@ -215,7 +215,7 @@ RegisterNetEvent('music:rtc:iceToBroadcaster', function(data)
 	if instanceId == nil or MusicInstances[instanceId] == nil then return end
 	local inst = MusicInstances[instanceId]
 	if inst.broadcaster == nil then return end
-	print(("[music] ice to broadcaster (inst %s) from %s"):format(instanceId, src))
+	debugPrint(("[music] ice to broadcaster (inst %s) from %s"):format(instanceId, src))
 	TriggerClientEvent('music:rtc:iceFromListener', inst.broadcaster, json.encode({ instanceId = instanceId, from = src, candidate = payload.candidate }))
 end)
 
@@ -232,6 +232,6 @@ RegisterNetEvent('music:rtc:iceToListener', function(targetId, candidate)
 		end
 	end
 	if not broadcasterInstanceId then return end
-	print(("[music] ice to listener %s from broadcaster %s (inst %s)"):format(toId, src, broadcasterInstanceId))
+	debugPrint(("[music] ice to listener %s from broadcaster %s (inst %s)"):format(toId, src, broadcasterInstanceId))
 	TriggerClientEvent('music:rtc:iceFromBroadcaster', toId, json.encode({ instanceId = broadcasterInstanceId, candidate = candidate }))
 end)

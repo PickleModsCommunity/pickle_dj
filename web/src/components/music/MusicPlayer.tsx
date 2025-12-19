@@ -26,7 +26,7 @@ export default function MusicPlayer() {
 			const fn = (window as any).GetParentResourceName;
 			if (typeof fn === "function") return fn();
 		} catch {}
-		return "pickle_clubs";
+		return "pickle_dj";
 	};
 	const nuiPost = async (name: string, data?: any) => {
 		const resource = getParentResource();

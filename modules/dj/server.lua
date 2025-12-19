@@ -92,7 +92,7 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ]], {})
         
-        print("^2[pickle_dj]^0 Database tables initialized")
+        debugPrint("^2[pickle_dj]^0 Database tables initialized")
     end)
 end)
 
@@ -229,7 +229,7 @@ function LoadDJStationsFromDatabase()
                 }, true)
                 -- Store mapping
                 StationDBMapping[gameId] = row.id
-                print(("^2[pickle_dj]^0 Loaded DJ station '%s' (ID: %s) from database"):format(row.name, row.id))
+                debugPrint(("^2[pickle_dj]^0 Loaded DJ station '%s' (ID: %s) from database"):format(row.name, row.id))
             end
             
             TriggerClientEvent('pickle_dj:registerDJStation', -1, DJStations)
@@ -391,7 +391,7 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
                     StationDBMapping[id] = stationInsertId
                     
                     TriggerClientEvent('pickle_dj:notify', source, "DJ station created successfully!", "success")
-                    print(("^2[pickle_dj]^0 DJ station '%s' created by %s (DB ID: %s, Game ID: %s)"):format(stationData.name, identifier, stationInsertId, id))
+                    debugPrint(("^2[pickle_dj]^0 DJ station '%s' created by %s (DB ID: %s, Game ID: %s)"):format(stationData.name, identifier, stationInsertId, id))
                 end
             end
             
@@ -841,7 +841,7 @@ lib.callback.register('pickle_dj:canAccessController', function(source, stationI
     
     -- Get the music instance for this station
     local musicInstanceId = station.streamId
-    local MusicInstances = exports['pickle_clubs']:GetMusicInstances() or {}
+    local MusicInstances = exports['pickle_dj']:GetMusicInstances() or {}
     local inst = MusicInstances[musicInstanceId]
     if not inst then
         return false, "Music instance not found"
@@ -911,22 +911,22 @@ RegisterNetEvent('pickle_dj:openController', function(stationId)
     local source = source
     local station = DJStations[stationId]
     if not station or not station.streamId then
-        print(("[pickle_dj] ERROR: Cannot open controller - station %s not found or missing streamId"):format(tostring(stationId)))
+        debugPrint(("[pickle_dj] ERROR: Cannot open controller - station %s not found or missing streamId"):format(tostring(stationId)))
         return
     end
     
     -- Get the music instance for this station
     local musicInstanceId = station.streamId
-    local MusicInstances = exports['pickle_clubs']:GetMusicInstances() or {}
+    local MusicInstances = exports['pickle_dj']:GetMusicInstances() or {}
     local inst = MusicInstances[musicInstanceId]
     if not inst then
-        print(("[pickle_dj] ERROR: Cannot open controller - music instance %s not found"):format(tostring(musicInstanceId)))
+        debugPrint(("[pickle_dj] ERROR: Cannot open controller - music instance %s not found"):format(tostring(musicInstanceId)))
         return
     end
     
     -- Ensure musicInstanceId is valid
     if not musicInstanceId or musicInstanceId == nil then
-        print(("[pickle_dj] ERROR: Cannot open controller - invalid musicInstanceId: %s"):format(tostring(musicInstanceId)))
+        debugPrint(("[pickle_dj] ERROR: Cannot open controller - invalid musicInstanceId: %s"):format(tostring(musicInstanceId)))
         return
     end
     
@@ -985,11 +985,11 @@ RegisterNetEvent('pickle_dj:openController', function(stationId)
                 
                 if inRange then
                     -- Broadcaster is still in range, deny the request (shouldn't happen if callback worked correctly, but keep as safety check)
-                    print(("[pickle_dj] Player %s tried to take over DJ station %s, but player %s is already broadcasting and in range"):format(source, stationId, inst.broadcaster))
+                    debugPrint(("[pickle_dj] Player %s tried to take over DJ station %s, but player %s is already broadcasting and in range"):format(source, stationId, inst.broadcaster))
                     return
                 else
                     -- Broadcaster is out of range, clean them up and allow takeover
-                    print(("[pickle_dj] Player %s taking over DJ station %s from out-of-range broadcaster %s (cleaning up)"):format(source, stationId, inst.broadcaster))
+                    debugPrint(("[pickle_dj] Player %s taking over DJ station %s from out-of-range broadcaster %s (cleaning up)"):format(source, stationId, inst.broadcaster))
                     inst.broadcaster = nil
                     inst.streamId = nil
                     TriggerClientEvent("music:musicInstanceUpdated", -1, musicInstanceId, inst)
@@ -998,11 +998,11 @@ RegisterNetEvent('pickle_dj:openController', function(stationId)
                 end
             else
                 -- Invalid coords, allow takeover
-                print(("[pickle_dj] Player %s taking over DJ station %s from broadcaster %s with invalid coords"):format(source, stationId, inst.broadcaster))
+                debugPrint(("[pickle_dj] Player %s taking over DJ station %s from broadcaster %s with invalid coords"):format(source, stationId, inst.broadcaster))
             end
         else
             -- Broadcaster is no longer connected, allow takeover
-            print(("[pickle_dj] Player %s taking over DJ station %s from disconnected broadcaster %s"):format(source, stationId, inst.broadcaster))
+            debugPrint(("[pickle_dj] Player %s taking over DJ station %s from disconnected broadcaster %s"):format(source, stationId, inst.broadcaster))
         end
     end
     
@@ -1020,7 +1020,7 @@ RegisterNetEvent('pickle_dj:openController', function(stationId)
     -- Push updated instance to clients
     TriggerClientEvent("music:musicInstanceUpdated", -1, musicInstanceId, inst)
     -- legacy: notify broadcast started
-    TriggerClientEvent('music:rtc:broadcastStarted', -1, json.encode({ streamId = streamId, broadcaster = source }))
+    -- TriggerClientEvent('music:rtc:broadcastStarted', -1, json.encode({ streamId = streamId, broadcaster = source }))
 end)
 
 -- Update particle effects for a station (networked to all clients)
@@ -1058,7 +1058,7 @@ CreateThread(function()
     while true do
         Wait(5000) -- Check every 5 seconds
         
-        local MusicInstances = exports['pickle_clubs']:GetMusicInstances() or {}
+        local MusicInstances = exports['pickle_dj']:GetMusicInstances() or {}
         for instanceId, inst in pairs(MusicInstances) do
             if inst.broadcaster and inst.streamId then
                 local broadcasterSrc = inst.broadcaster

@@ -51,7 +51,7 @@ RegisterNetEvent('music:rtc:turnConfig', function(data)
 	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
 	if ok and type(parsed) == "table" then payload = parsed end
 	__turn_config = payload
-	print("turn config", json.encode(__turn_config))
+	debugPrint("turn config", json.encode(__turn_config))
 end)
 
 RegisterNUICallback('music_rtc_get_turn_config', function(data, cb)
@@ -66,7 +66,7 @@ end)
 RegisterNUICallback('music_rtc_announce_broadcast', function(data, cb)
 	-- Ensure instanceId is set (use the controller the player opened)
 	local payload = data or {}
-	print("[music] NUI announceBroadcast callback received", json.encode(payload), "CurrentControlInstanceId:", CurrentControlInstanceId)
+	debugPrint("[music] NUI announceBroadcast callback received", json.encode(payload), "CurrentControlInstanceId:", CurrentControlInstanceId)
 	
 	-- Convert instanceId to number if it's a string
 	if payload.instanceId ~= nil then
@@ -75,7 +75,7 @@ RegisterNUICallback('music_rtc_announce_broadcast', function(data, cb)
 	-- Fallback to CurrentControlInstanceId if instanceId is still nil
 	if payload.instanceId == nil then 
 		payload.instanceId = CurrentControlInstanceId 
-		print("[music] Using CurrentControlInstanceId fallback:", payload.instanceId)
+		debugPrint("[music] Using CurrentControlInstanceId fallback:", payload.instanceId)
 	end
 	-- Ensure instanceId is a number
 	if payload.instanceId ~= nil then
@@ -85,13 +85,13 @@ RegisterNUICallback('music_rtc_announce_broadcast', function(data, cb)
 	-- Validate that we have a valid instanceId before proceeding
 	-- This should only be called when a player opens the DJ controller
 	if payload.instanceId == nil or payload.instanceId == 0 then
-		print("[music] ERROR: Cannot announce broadcast - instanceId is nil or invalid. This should only happen when a player opens the DJ controller.")
-		print("[music] This may indicate a stale broadcast attempt or the controller was opened before the music instance was ready.")
+		debugPrint("[music] ERROR: Cannot announce broadcast - instanceId is nil or invalid. This should only happen when a player opens the DJ controller.")
+		debugPrint("[music] This may indicate a stale broadcast attempt or the controller was opened before the music instance was ready.")
 		if cb then cb({ ok = false, error = "instanceId is nil or invalid" }) end
 		return
 	end
 	
-	print("[music] NUI announceBroadcast sending to server", json.encode(payload))
+	debugPrint("[music] NUI announceBroadcast sending to server", json.encode(payload))
 	-- If streamId is provided, use it; otherwise let server generate one
 	-- Note: Server will validate and may override streamId if needed
 	local enc = json.encode(payload)
@@ -101,10 +101,10 @@ end)
 
 -- Handle automatic broadcast start from server
 RegisterNetEvent('pickle_dj:startBroadcasting', function(musicInstanceId, streamId)
-	print("[music] Received pickle_dj:startBroadcasting", musicInstanceId, streamId, type(musicInstanceId))
+	debugPrint("[music] Received pickle_dj:startBroadcasting", musicInstanceId, streamId, type(musicInstanceId))
 	-- Set the current control instance (this is critical for the NUI callback to know which instance)
 	CurrentControlInstanceId = tonumber(musicInstanceId) or musicInstanceId
-	print("[music] Set CurrentControlInstanceId to", CurrentControlInstanceId)
+	debugPrint("[music] Set CurrentControlInstanceId to", CurrentControlInstanceId)
 	-- Note: The dj/client.lua also handles this event to send to NUI
 	-- We just set CurrentControlInstanceId here
 end)
@@ -124,7 +124,7 @@ RegisterNUICallback('music_rtc_stop_broadcast', function(data, cb)
 end)
 
 RegisterNUICallback('music_rtc_offer', function(data, cb)
-	print("[music] NUI music_rtc_offer")
+	debugPrint("[music] NUI music_rtc_offer")
 	-- data: { sdp: string }
 	local sdp = (data and data.sdp) or ""
 	-- Include the instance the listener is attempting to join
@@ -138,7 +138,7 @@ RegisterNUICallback('music_rtc_offer', function(data, cb)
 end)
 
 RegisterNUICallback('music_rtc_answer', function(data, cb)
-	print("[music] NUI music_rtc_answer -> to", (data and data.to) or -1)
+	debugPrint("[music] NUI music_rtc_answer -> to", (data and data.to) or -1)
 	-- data: { to: number, sdp: string }
 	local to = (data and data.to) or -1
 	local sdp = (data and data.sdp) or ""
@@ -147,7 +147,7 @@ RegisterNUICallback('music_rtc_answer', function(data, cb)
 end)
 
 RegisterNUICallback('music_rtc_ice_to_broadcaster', function(data, cb)
-	print("[music] NUI music_rtc_ice_to_broadcaster")
+	debugPrint("[music] NUI music_rtc_ice_to_broadcaster")
 	-- data: { candidate: any-json }
 	local cand = (data and data.candidate) or nil
 	if cand ~= nil then
@@ -158,7 +158,7 @@ RegisterNUICallback('music_rtc_ice_to_broadcaster', function(data, cb)
 end)
 
 RegisterNUICallback('music_rtc_ice_to_listener', function(data, cb)
-	print("[music] NUI music_rtc_ice_to_listener -> to", (data and data.to) or -1)
+	debugPrint("[music] NUI music_rtc_ice_to_listener -> to", (data and data.to) or -1)
 	-- data: { to: number, candidate: any-json }
 	local to = (data and data.to) or -1
 	local cand = (data and data.candidate) or nil
@@ -168,23 +168,25 @@ RegisterNUICallback('music_rtc_ice_to_listener', function(data, cb)
 	if cb then cb({ ok = true }) end
 end)
 
-RegisterNetEvent('music:rtc:broadcastStarted', function(data)
-	local payload = {}
-	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
-	if ok and type(parsed) == "table" then payload = parsed end
-	-- Prevent broadcaster from listening to their own stream unless DebugListen is true
-	local myId = GetPlayerServerId(PlayerId())
-	-- if not (Config and Config.DebugListen) and payload.broadcaster == myId then
-	-- 	return
-	-- end
-	SendNUIMessage({
-		type = 'music:rtc:broadcastStarted',
-		payload = {
-			streamId = payload.streamId,
-			broadcaster = payload.broadcaster
-		}
-	})
-end)
+-- OLD, NO LONGER USED
+
+-- RegisterNetEvent('music:rtc:broadcastStarted', function(data)
+-- 	local payload = {}
+-- 	local ok, parsed = pcall(function() return json.decode(data or "{}") end)
+-- 	if ok and type(parsed) == "table" then payload = parsed end
+-- 	-- Prevent broadcaster from listening to their own stream unless DebugListen is true
+-- 	local myId = GetPlayerServerId(PlayerId())
+-- 	-- if not (Config and Config.DebugListen) and payload.broadcaster == myId then
+-- 	-- 	return
+-- 	-- end
+-- 	SendNUIMessage({
+-- 		type = 'music:rtc:broadcastStarted',
+-- 		payload = {
+-- 			streamId = payload.streamId,
+-- 			broadcaster = payload.broadcaster
+-- 		}
+-- 	})
+-- end)
 
 RegisterNetEvent('music:rtc:broadcastStopped', function(data)
 	SendNUIMessage({
@@ -296,7 +298,7 @@ CreateThread(function()
 			if CurrentListeningInstanceId ~= nearestId then
 				-- Switch to this instance
 				if CurrentListeningInstanceId ~= nil then
-					print("[MSC] STOP BROADCAST", CurrentListeningInstanceId)
+					debugPrint("[MSC] STOP BROADCAST", CurrentListeningInstanceId)
 					SendNUIMessage({
 						type = 'music:rtc:broadcastStopped',
 						payload = {}
@@ -312,7 +314,7 @@ CreateThread(function()
 				-- 	goto __after_listen_tick
 				-- end
 				CurrentListeningInstanceId = nearestId
-				print("[MSC] START BROADCAST", nearestId)
+				debugPrint("[MSC] START BROADCAST", nearestId)
 				SendNUIMessage({
 					type = 'music:rtc:broadcastStarted',
 					payload = {
