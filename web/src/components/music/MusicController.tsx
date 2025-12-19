@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNuiEvent } from "../../providers/nui/useNui";
 import RangeControl, { VuMeter } from "./RangeControl";
-import { Mic, MicOff, Plus } from "lucide-react";
+import { Mic, MicOff, Plus, Square } from "lucide-react";
 import { fetchNui } from "@/providers/nui/fetchNui";
 import LightControls from "./LightControls";
 import MasterLightControls from "./MasterLightControls";
@@ -405,6 +405,13 @@ export default function MusicController() {
                 setIsMicOn(false);
             }
         } catch {}
+    };
+
+    const stopBroadcastAndClose = async () => {
+        await stopBroadcast();
+        // Close the UI - set visible state first, then notify client
+        setVisible(false);
+        await fetchNui("setVisible", { visible: false });
     };
 
     const ensureBroadcasterPeer = async (listenerId: number): Promise<RTCPeerConnection | null> => {
@@ -1894,6 +1901,31 @@ export default function MusicController() {
                     if (deck === "controls") {
                         return (
                             <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", justifyContent: "center"  }}>
+                                {isBroadcasting && (
+                                    <button
+                                        onClick={stopBroadcastAndClose}
+                                        style={{
+                                            background: "#dc2626",
+                                            color: "white",
+                                            border: "none",
+                                            borderRadius: "6px",
+                                            padding: "8px 16px",
+                                            cursor: "pointer",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            fontSize: "14px",
+                                            fontWeight: "500",
+                                            transition: "background 0.2s"
+                                        }}
+                                        onMouseEnter={(e) => e.currentTarget.style.background = "#b91c1c"}
+                                        onMouseLeave={(e) => e.currentTarget.style.background = "#dc2626"}
+                                        title="Stop broadcasting and close controller"
+                                    >
+                                        <Square className="w-4 h-4" />
+                                        Stop Broadcasting
+                                    </button>
+                                )}
                                 <div className="mixerRow" style={{ gap: 24, justifyContent: "space-between", width: "100%" }}>
                                     <div className="vGroup h-full">
                                         <RangeControl

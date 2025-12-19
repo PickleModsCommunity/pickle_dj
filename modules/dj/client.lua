@@ -44,6 +44,7 @@ function UnregisterDJStation(id)
             for _, lightData in ipairs(LocalDJStations[id].entityData.lights or {}) do
                 if lightData.entity and DoesEntityExist(lightData.entity) then
                     DeleteScriptObject(lightData.entity)
+                    DeleteScriptObject(lightData.attEnt)
                 end
             end
             for _, smokeMachineData in ipairs(LocalDJStations[id].entityData.smokemachines or {}) do
@@ -52,12 +53,6 @@ function UnregisterDJStation(id)
                 end
             end
         end
-        for k,v in pairs(LocalDJStations[id].vfxEntities) do
-            DeleteScriptObject(v.lightProp)
-            DeleteScriptObject(v.visualProp)
-            DeleteScriptObject(v.lampProp)
-        end
-        LocalDJStations[id].vfxEntities = nil
     end
     LocalDJStations[id] = nil
 end
@@ -131,15 +126,19 @@ local function RenderDJStationProps(id)
                 local spec = (Config.LightTypes and light.data.lightType and Config.LightTypes[light.data.lightType]) or nil
                 local model = (spec and spec.model) or (light.model or `stg_blinder`)
                 local ent = CreateProp(model, light.coords.x, light.coords.y, light.coords.z, false, true, false)
+                local attEnt = CreateProp(model, light.coords.x, light.coords.y, light.coords.z, false, true, false)
                 SetEntityCoordsNoOffset(ent, light.coords.x, light.coords.y, light.coords.z, 0.0, 0.0, 0.0)
                 local rot = spec and spec.rotation or vector3(0.0, 0.0, 0.0)
                 SetEntityCollision(ent, false, false)
                 SetEntityRotation(ent, rot.x, rot.y, light.heading + rot.z, 2, true)
                 FreezeEntityPosition(ent, true)
+                AttachEntityToEntity(attEnt, ent, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, false, false, false, 2, true)
                 lightData.entity = ent
+                lightData.attEnt = attEnt
                 lightData.heading = light.heading + rot.z
 
                 SetObjectLightColor(ent, 1, lightData.color[1], lightData.color[2], lightData.color[3])
+                SetObjectLightColor(attEnt, 1, 0, 0, 0)
             end
         end
     end
@@ -172,9 +171,6 @@ local function RenderDJStationProps(id)
             end
         end
     end
-    
-    -- Keep old VFX system for backwards compatibility (auto-generated lights)
-    LocalDJStations[id].vfxEntities = {}
 end
 
 -- Unrender all props for a DJ station (but keep station data)
@@ -208,7 +204,9 @@ local function UnrenderDJStationProps(id)
         for _, lightData in ipairs(LocalDJStations[id].entityData.lights or {}) do
             if lightData.entity and DoesEntityExist(lightData.entity) then
                 DeleteScriptObject(lightData.entity)
+                DeleteScriptObject(lightData.attEnt)
                 lightData.entity = nil
+                lightData.attEnt = nil
             end
         end
         for _, smokeMachineData in ipairs(LocalDJStations[id].entityData.smokemachines or {}) do
@@ -217,22 +215,6 @@ local function UnrenderDJStationProps(id)
                 smokeMachineData.entity = nil
             end
         end
-    end
-    
-    -- Delete VFX entities
-    if LocalDJStations[id].vfxEntities then
-        for k, v in pairs(LocalDJStations[id].vfxEntities) do
-            if v.lightProp and DoesEntityExist(v.lightProp) then
-                DeleteScriptObject(v.lightProp)
-            end
-            if v.visualProp and DoesEntityExist(v.visualProp) then
-                DeleteScriptObject(v.visualProp)
-            end
-            if v.lampProp and DoesEntityExist(v.lampProp) then
-                DeleteScriptObject(v.lampProp)
-            end
-        end
-        LocalDJStations[id].vfxEntities = {}
     end
 end
 
@@ -247,10 +229,17 @@ function RegisterDJStation(id)
 			heading = station.heading,
             zOffset = -1.0,
 		}, function(selection, targetData)
-            lib.registerContext({
-                id = 'dj_station_' .. id,
-                title = station.name,
-                options = {
+            -- Check if player can access this station before showing menu
+            lib.callback('pickle_dj:canAccessStationInteraction', false, function(canAccess, canManage, errorMessage)
+                if not canAccess then
+                    if errorMessage then
+                        ShowNotification(errorMessage, "error")
+                    else
+                        ShowNotification("You don't have access to this DJ station", "error")
+                    end
+                    return
+                end
+                local options =  {
                     { 
                         title = 'Open DJ Controller', 
                         description = 'Open the DJ controller for this station.',
@@ -456,21 +445,39 @@ function RegisterDJStation(id)
                             end, id)
                         end
                     },
-                    { 
+                }
+                if canManage then
+                    table.insert(options, { 
                         title = 'Manage DJ Objects', 
                         description = 'Place speakers, lights, and other objects for this station.',
                         icon = 'cog',
                         onSelect = function()
                             OpenEntityManagementMenu(id)
                         end
-                    },
-                }
-            })
-            lib.showContext('dj_station_' .. id)
+                    })
+                    table.insert(options, {
+                        title = 'Manage Whitelist',
+                        description = 'Manage who can access this DJ station',
+                        icon = 'user-check',
+                        onSelect = function()
+                            OpenWhitelistMenu(id)
+                        end
+                    })
+                end
+                if #options == 1 then
+                    options[1].onSelect()
+                    return
+                end
+                lib.registerContext({
+                    id = 'dj_station_' .. id,
+                    title = station.name,
+                    options = options
+                })
+                lib.showContext('dj_station_' .. id)
+            end, id)
 
 		end),
         entity = nil,
-        vfxEntities = {},
         speakerEntities = {},
 	}
     -- Initialize entity storage (but don't create props yet - render distance thread will handle that)
@@ -558,9 +565,6 @@ function RegisterDJStation(id)
             })
         end
     end
-    
-    -- Keep old VFX system for backwards compatibility (auto-generated lights)
-    LocalDJStations[id].vfxEntities = {}
     
     -- Check if we're in range and render if so
     local playerCoords = GetEntityCoords(PlayerPedId())
@@ -814,15 +818,7 @@ CreateThread(function()
                 end
                 
                 if updateLightColor[stationId] and updateLightColor[stationId][light.lightType] then
-                    if Config.LaggyButCoolLights then
-                        if not visibleLights[stationId][light.lightType] then
-                            SetObjectLightColor(light.entity, 1, 0, 0, 0)
-                        else
-                            SetObjectLightColor(light.entity, 1, light.color[1], light.color[2], light.color[3])
-                        end
-                    else
-                        SetEntityVisible(light.entity, visibleLights[stationId][light.lightType], false)
-                    end
+                    SetEntityAlpha(light.entity, visibleLights[stationId][light.lightType] and 255 or 0, false)
                 end
                 SetEntityRotation(light.entity, locRot + tilt, 0.0, (light.heading) + (locHz), 2, true)
                 ::continue::
@@ -1623,14 +1619,22 @@ function OpenEntityManagementMenu(stationId)
     local localStation = LocalDJStations[stationId]
     if not localStation then return end
     
-    -- Check admin permission
-    lib.callback('pickle_dj:checkAdmin', false, function(isAdmin)
-        if not isAdmin then
-            ShowNotification("You don't have permission to manage DJ entities", "error")
+    -- Check if player can manage this station (owner or admin)
+    lib.callback('pickle_dj:canManageStation', false, function(canManage)
+        if not canManage then
+            ShowNotification("You don't have permission to manage this DJ station", "error")
             return
         end
         
         local options = {
+            {
+                title = "Move DJ Table",
+                description = "Reposition the DJ table (entities will move with it)",
+                icon = "arrows-up-down-left-right",
+                onSelect = function()
+                    StartStationMove(stationId)
+                end
+            },
             {
                 title = "Place Entity",
                 description = "Place a new speaker, light, or other object",
@@ -1674,7 +1678,7 @@ function OpenEntityManagementMenu(stationId)
             options = options
         })
         lib.showContext('dj_entity_manage_' .. stationId)
-    end)
+    end, stationId)
 end
 
 -- Open entity type selection menu
@@ -1863,6 +1867,42 @@ function ToggleEntityViewing(stationId)
     end
 end
 
+-- Start moving a DJ station
+function StartStationMove(stationId)
+    local station = DJStations[stationId]
+    if not station then
+        ShowNotification("Station not found", "error")
+        return
+    end
+    
+    local localStation = LocalDJStations[stationId]
+    if not localStation or not localStation.entity or not DoesEntityExist(localStation.entity) then
+        ShowNotification("Station entity not found", "error")
+        return
+    end
+    
+    -- Get current position and rotation
+    local currentCoords = GetEntityCoords(localStation.entity)
+    local currentRotation = GetEntityRotation(localStation.entity)
+    
+    -- Start gizmo editor at current position
+    local result = StartGizmoEditor({
+        model = station.prop,
+        coords = currentCoords,
+        rotation = currentRotation,
+        enableCancel = true
+    })
+    
+    ShowNotification("Move the DJ table. Press E to confirm, Q to cancel, A/D to rotate", "info")
+    
+    if result and result.position then
+        -- Send new position to server
+        TriggerServerEvent('pickle_dj:moveStation', stationId, result.position, result.rotation.z)
+    else
+        ShowNotification("Station move cancelled", "error")
+    end
+end
+
 -- Open entity removal menu
 function OpenEntityRemoveMenu(stationId)
     local localStation = LocalDJStations[stationId]
@@ -2037,6 +2077,190 @@ RegisterNetEvent('pickle_dj:entityUpdated', function(stationId)
         RegisterDJStation(stationId)
     end
 end)
+
+-- Open whitelist management menu
+function OpenWhitelistMenu(stationId)
+    local station = DJStations[stationId]
+    if not station then return end
+    
+    -- Check if player can manage whitelist
+    lib.callback('pickle_dj:canManageStation', false, function(canManage)
+        if not canManage then
+            ShowNotification("You don't have permission to manage this DJ station", "error")
+            return
+        end
+        
+        -- Check if owner (non-admin) - they can only manage players
+        lib.callback('pickle_dj:checkAdmin', false, function(isAdmin)
+            -- Get whitelist
+            lib.callback('pickle_dj:getWhitelist', false, function(whitelist)
+                local options = {}
+                
+                -- Add existing entries
+                for _, entry in ipairs(whitelist or {}) do
+                    local displayName = entry.name or entry.value
+                    if entry.type == 'job' then
+                        displayName = displayName .. " (Rank: " .. (entry.rank or 0) .. ")"
+                    elseif entry.type == 'ace' then
+                        displayName = entry.value
+                    end
+                    
+                    table.insert(options, {
+                        title = displayName,
+                        description = "Type: " .. entry.type:gsub("^%l", string.upper),
+                        icon = entry.type == 'player' and "user" or (entry.type == 'job' and "briefcase" or "shield"),
+                        onSelect = function()
+                            lib.callback('pickle_dj:checkAdmin', false, function(isAdmin2)
+                                local canRemove = isAdmin2
+                                if not isAdmin2 then
+                                    -- Non-admin owners can only remove players
+                                    canRemove = entry.type == 'player'
+                                end
+                                
+                                if canRemove then
+                                    lib.registerContext({
+                                        id = 'dj_whitelist_remove_' .. entry.id,
+                                        title = "Remove from Whitelist",
+                                        menu = 'dj_whitelist_' .. stationId,
+                                        options = {
+                                            {
+                                                title = "Confirm Remove",
+                                                description = "Remove " .. displayName .. " from whitelist",
+                                                icon = "trash",
+                                                onSelect = function()
+                                                    TriggerServerEvent('pickle_dj:removeWhitelist', stationId, entry.id)
+                                                    SetTimeout(500, function()
+                                                        OpenWhitelistMenu(stationId)
+                                                    end)
+                                                end
+                                            }
+                                        }
+                                    })
+                                    lib.showContext('dj_whitelist_remove_' .. entry.id)
+                                else
+                                    ShowNotification("You can only remove players from the whitelist", "error")
+                                end
+                            end)
+                        end
+                    })
+                end
+                
+                -- Add option to add new entry
+                table.insert(options, {
+                    title = "Add to Whitelist",
+                    description = "Add a player, job, or ACE permission",
+                    icon = "plus",
+                    onSelect = function()
+                        OpenAddWhitelistMenu(stationId, isAdmin)
+                    end
+                })
+                
+                lib.registerContext({
+                    id = 'dj_whitelist_' .. stationId,
+                    title = station.name .. " - Whitelist Management",
+                    menu = 'dj_station_' .. stationId,
+                    options = options
+                })
+                lib.showContext('dj_whitelist_' .. stationId)
+            end, stationId)
+        end)
+    end, stationId)
+end
+
+-- Open add whitelist menu
+function OpenAddWhitelistMenu(stationId, isAdmin)
+    local options = {
+        {
+            title = "Add Player",
+            description = "Select a nearby player to add",
+            icon = "user",
+            onSelect = function()
+                local station = DJStations[stationId]
+                if not station or not station.coords then
+                    ShowNotification("Station not found", "error")
+                    return
+                end
+                
+                -- Get nearby players
+                lib.callback('pickle_dj:getNearbyPlayers', false, function(nearbyPlayers)
+                    if not nearbyPlayers or #nearbyPlayers == 0 then
+                        ShowNotification("No nearby players found", "info")
+                        return
+                    end
+                    
+                    local options = {}
+                    for _, player in ipairs(nearbyPlayers) do
+                        table.insert(options, {
+                            title = player.name,
+                            description = "ID: " .. player.serverId .. " | Distance: " .. player.distance .. "m",
+                            icon = "user",
+                            onSelect = function()
+                                TriggerServerEvent('pickle_dj:addWhitelist', stationId, 'player', player.identifier, player.name, 0)
+                                ShowNotification("Added " .. player.name .. " to whitelist", "success")
+                                SetTimeout(500, function()
+                                    OpenWhitelistMenu(stationId)
+                                end)
+                            end
+                        })
+                    end
+                    
+                    lib.registerContext({
+                        id = 'dj_select_player_' .. stationId,
+                        title = "Select Player to Add",
+                        menu = 'dj_add_whitelist_' .. stationId,
+                        options = options
+                    })
+                    lib.showContext('dj_select_player_' .. stationId)
+                end, station.coords, 10.0)
+            end
+        }
+    }
+    
+    if isAdmin then
+        table.insert(options, {
+            title = "Add Job",
+            description = "Add a job with minimum rank",
+            icon = "briefcase",
+            onSelect = function()
+                local input = lib.inputDialog('Add Job to Whitelist', {
+                    {type = 'input', label = 'Job Name', description = 'Enter the job name (e.g., police)', required = true},
+                    {type = 'number', label = 'Minimum Rank', description = 'Minimum rank level (0 = all ranks)', required = true, default = 0, min = 0}
+                })
+                if input and input[1] and input[2] ~= nil then
+                    TriggerServerEvent('pickle_dj:addWhitelist', stationId, 'job', input[1], input[1], input[2])
+                    SetTimeout(500, function()
+                        OpenWhitelistMenu(stationId)
+                    end)
+                end
+            end
+        })
+        
+        table.insert(options, {
+            title = "Add ACE Permission",
+            description = "Add an ACE permission",
+            icon = "shield",
+            onSelect = function()
+                local input = lib.inputDialog('Add ACE Permission to Whitelist', {
+                    {type = 'input', label = 'ACE Permission', description = 'Enter the ACE permission (e.g., command.dj)', required = true}
+                })
+                if input and input[1] then
+                    TriggerServerEvent('pickle_dj:addWhitelist', stationId, 'ace', input[1], input[1], 0)
+                    SetTimeout(500, function()
+                        OpenWhitelistMenu(stationId)
+                    end)
+                end
+            end
+        })
+    end
+    
+    lib.registerContext({
+        id = 'dj_add_whitelist_' .. stationId,
+        title = "Add to Whitelist",
+        menu = 'dj_whitelist_' .. stationId,
+        options = options
+    })
+    lib.showContext('dj_add_whitelist_' .. stationId)
+end
 
 -- Thread to draw entity labels when viewing entities
 CreateThread(function()

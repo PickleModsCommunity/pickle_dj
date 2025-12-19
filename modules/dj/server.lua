@@ -1,5 +1,6 @@
 local DJStations = {}
 local StationDBMapping = {} -- Maps game ID to database ID
+local StationWhitelists = {} -- dbId -> {whitelist entries}
 
 -- Per-station light controls (in-memory only, not saved to database)
 -- flash: 0 = off, 1 = high (every tick), 2 = low (every 2 ticks)
@@ -57,6 +58,40 @@ local function getStationLightControls(stationId)
     return StationLightControls[stationId]
 end
 
+function CanInteractWithStation(source, stationId)
+    local station = DJStations[stationId]
+    if not station then
+        return false, false, "Station not found"
+    end
+    
+    -- Admins can always access
+    if IsPlayerAdmin(source) then
+        print("Admin can access station interaction")
+        return true, true, nil
+    end
+    
+    -- Check if player is owner
+    local playerIdentifier = GetIdentifier(source)
+    if playerIdentifier and station.identifier and station.identifier == playerIdentifier then
+        print("Player is owner of station")
+        return true, true, nil
+    end
+    
+    -- Check whitelist
+    local dbId = StationDBMapping[stationId]
+    if dbId then
+        local whitelist = LoadStationWhitelist(dbId)
+        if whitelist and #whitelist > 0 then
+            -- Whitelist exists, check access
+            if CheckWhitelistAccess(source, stationId) then
+                print("Player is whitelisted for station")
+                return true, false, nil
+            end
+        end
+    end
+    return false, false, "You are not whitelisted for this station"
+end
+
 -- Create database tables on resource start
 CreateThread(function()
     MySQL.ready(function()
@@ -93,6 +128,23 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ]], {})
         
+        -- Whitelist table for DJ stations
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `pickle_dj_whitelist` (
+                `id` INT(11) NOT NULL AUTO_INCREMENT,
+                `station_id` INT(11) NOT NULL,
+                `type` ENUM('player', 'job', 'ace') NOT NULL,
+                `value` VARCHAR(255) NOT NULL,
+                `name` VARCHAR(255),
+                `rank` INT(11) DEFAULT 0,
+                `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                INDEX `idx_station_id` (`station_id`),
+                INDEX `idx_type` (`type`),
+                FOREIGN KEY (`station_id`) REFERENCES `pickle_dj_stations`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]], {})
+        
         debugPrint("^2[pickle_dj]^0 Database tables initialized")
     end)
 end)
@@ -122,6 +174,7 @@ function RegisterDJStation(station, skipSync)
         lights = station.lights or nil,
         smokemachines = station.smokemachines or nil,
         lightControls = lightControls,
+        identifier = station.identifier or nil,
     }
     if skipSync then return id end
     
@@ -227,6 +280,7 @@ function LoadDJStationsFromDatabase()
                     smokemachines = smokemachines,
                     lightControls = defaultLightControls,
                     streamId = streamId,
+                    identifier = row.identifier,
                 }, true)
                 -- Store mapping
                 StationDBMapping[gameId] = row.id
@@ -243,6 +297,8 @@ CreateThread(function()
     MySQL.ready(function()
         -- Load from database first
         LoadDJStationsFromDatabase()
+        -- Load whitelists
+        LoadStationWhitelistOnStart()
         -- Sync all stations with light controls included (LoadDJStationsFromDatabase will handle the sync)
     end)
 end)
@@ -269,6 +325,27 @@ end)
 -- Admin permission check callback
 lib.callback.register('pickle_dj:checkAdmin', function(source)
     return IsPlayerAdmin(source) == true
+end)
+
+-- Check if player is owner or admin of a station
+lib.callback.register('pickle_dj:canManageStation', function(source, gameId)
+    local station = DJStations[gameId]
+    if not station then
+        return false
+    end
+    
+    -- Admins can always manage
+    if IsPlayerAdmin(source) then
+        return true
+    end
+    
+    -- Check if player is the owner
+    local playerIdentifier = GetIdentifier(source)
+    if playerIdentifier and station.identifier and station.identifier == playerIdentifier then
+        return true
+    end
+    
+    return false
 end)
 
 -- Save entity to database
@@ -417,9 +494,10 @@ end)
 RegisterServerEvent('pickle_dj:addEntity', function(gameId, entityType, entityData)
     local source = source
     
-    -- Check admin permission
-    if not IsPlayerAdmin(source) then
-        TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to manage DJ entities", "error")
+    -- Check if player can manage this station (owner or admin)
+    local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
+    if not canManage then
+        TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to manage DJ entities", "error")
         return
     end
     
@@ -505,17 +583,146 @@ function UpdateMusicInstanceSpeakers(musicInstanceId, speakers)
     TriggerEvent('pickle_dj:updateMusicInstanceSpeakers', musicInstanceId, speakers)
 end
 
+-- Move DJ station
+RegisterServerEvent('pickle_dj:moveStation', function(gameId, newCoords, newHeading)
+    local source = source
+    
+    local station = DJStations[gameId]
+    if not station then
+        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        return
+    end
+    
+    -- Check if player can manage this station (owner or admin)
+    local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
+    if not canManage then
+        TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to move this station", "error")
+        return
+    end
+    
+    -- Get database station ID
+    local dbId = StationDBMapping[gameId]
+    if not dbId then
+        TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+        return
+    end
+    
+    -- Calculate offset from old position to new position
+    local oldCoords = station.coords
+    local offset = vector3(
+        newCoords.x - oldCoords.x,
+        newCoords.y - oldCoords.y,
+        newCoords.z - oldCoords.z
+    )
+    
+    -- Update station coordinates in database
+    local coordsJson = json.encode(newCoords)
+    MySQL.Async.execute(
+        "UPDATE `pickle_dj_stations` SET `coords` = @coords, `heading` = @heading WHERE `id` = @id",
+        {
+            ['@coords'] = coordsJson,
+            ['@heading'] = newHeading,
+            ['@id'] = dbId
+        },
+        function(affectedRows)
+            if affectedRows > 0 then
+                -- Update station in memory
+                station.coords = newCoords
+                station.heading = newHeading
+                
+                -- Update music instance position if it exists
+                if station.streamId then
+                    local MusicInstances = exports['pickle_dj']:GetMusicInstances() or {}
+                    for instanceId, instance in pairs(MusicInstances) do
+                        if instanceId == station.streamId then
+                            instance.coords = newCoords
+                            instance.heading = newHeading
+                            -- Speakers will be updated when entities are reloaded
+                            TriggerClientEvent("music:musicInstanceUpdated", -1, instanceId, instance)
+                            break
+                        end
+                    end
+                end
+                
+                -- Update all entity coordinates by the offset
+                MySQL.Async.fetchAll(
+                    "SELECT `id`, `coords` FROM `pickle_dj_entities` WHERE `station_id` = @station_id",
+                    {
+                        ['@station_id'] = dbId
+                    },
+                    function(entities)
+                        if entities and #entities > 0 then
+                            local updateCount = 0
+                            local totalEntities = #entities
+                            
+                            for _, entity in ipairs(entities) do
+                                local oldEntityCoords = json.decode(entity.coords)
+                                local newEntityCoords = {
+                                    x = oldEntityCoords.x + offset.x,
+                                    y = oldEntityCoords.y + offset.y,
+                                    z = oldEntityCoords.z + offset.z
+                                }
+                                local newEntityCoordsJson = json.encode(newEntityCoords)
+                                
+                                MySQL.Async.execute(
+                                    "UPDATE `pickle_dj_entities` SET `coords` = @coords WHERE `id` = @id",
+                                    {
+                                        ['@coords'] = newEntityCoordsJson,
+                                        ['@id'] = entity.id
+                                    },
+                                    function()
+                                        updateCount = updateCount + 1
+                                        if updateCount == totalEntities then
+                                            -- All entities updated, sync station position to all clients
+                                            local stationData = {
+                                                name = station.name,
+                                                coords = newCoords,
+                                                heading = newHeading,
+                                                prop = station.prop,
+                                                speakers = station.speakers,
+                                                lights = station.lights,
+                                                smokemachines = station.smokemachines,
+                                                lightControls = station.lightControls or getStationLightControls(gameId),
+                                            }
+                                            TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
+                                            TriggerClientEvent('pickle_dj:entityUpdated', -1, gameId)
+                                            TriggerClientEvent('pickle_dj:notify', source, "DJ station moved successfully", "success")
+                                            debugPrint(("^2[pickle_dj]^0 Station %s moved by %s"):format(gameId, playerIdentifier or "unknown"))
+                                        end
+                                    end
+                                )
+                            end
+                        else
+                            -- No entities to update, sync station position to all clients
+                            local stationData = {
+                                name = station.name,
+                                coords = newCoords,
+                                heading = newHeading,
+                                prop = station.prop,
+                                speakers = station.speakers,
+                                lights = station.lights,
+                                smokemachines = station.smokemachines,
+                                lightControls = station.lightControls or getStationLightControls(gameId),
+                            }
+                            TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
+                            TriggerClientEvent('pickle_dj:entityUpdated', -1, gameId)
+                            TriggerClientEvent('pickle_dj:notify', source, "DJ station moved successfully", "success")
+                            debugPrint(("^2[pickle_dj]^0 Station %s moved by %s"):format(gameId, playerIdentifier or "unknown"))
+                        end
+                    end
+                )
+            else
+                TriggerClientEvent('pickle_dj:notify', source, "Failed to update station", "error")
+            end
+        end
+    )
+end)
+
 -- Remove entity from station
 RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
     local source = source
     
-    -- Check admin permission
-    if not IsPlayerAdmin(source) then
-        TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to manage DJ entities", "error")
-        return
-    end
-    
-    -- Get entity info to find station
+    -- Get entity info to find station first
     MySQL.Async.fetchAll("SELECT station_id, entity_type FROM `pickle_dj_entities` WHERE id = @id", {
         ['@id'] = entityId
     }, function(results)
@@ -526,20 +733,32 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
         
         local stationId = results[1].station_id
         
+        -- Find game ID for this station
+        local gameId = nil
+        for gId, dbId in pairs(StationDBMapping) do
+            if dbId == stationId then
+                gameId = gId
+                break
+            end
+        end
+        
+        if not gameId then
+            TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+            return
+        end
+        
+        -- Check if player can manage this station (owner or admin)
+        local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
+        if not canManage then
+            TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to manage DJ entities", "error")
+            return
+        end
+        
         -- Delete entity
         MySQL.Async.execute("DELETE FROM `pickle_dj_entities` WHERE id = @id", {
             ['@id'] = entityId
         }, function(affectedRows)
             if affectedRows > 0 then
-                -- Find game ID for this station
-                local gameId = nil
-                for gId, dbId in pairs(StationDBMapping) do
-                    if dbId == stationId then
-                        gameId = gId
-                        break
-                    end
-                end
-                
                 if gameId then
                     -- Reload entities for this station
                     MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_entities` WHERE station_id = @station_id", {
@@ -618,12 +837,6 @@ end)
 RegisterNetEvent('pickle_dj:updateEntityColorSpec', function(entityId, colorSpec)
     local source = source
     
-    -- Check admin permission
-    if not IsPlayerAdmin(source) then
-        TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to manage DJ entities", "error")
-        return
-    end
-    
     -- Validate colorSpec
     if colorSpec ~= "primary" and colorSpec ~= "secondary" then
         TriggerClientEvent('pickle_dj:notify', source, "Invalid color specification", "error")
@@ -640,6 +853,29 @@ RegisterNetEvent('pickle_dj:updateEntityColorSpec', function(entityId, colorSpec
         end
         
         local entity = results[1]
+        local stationId = entity.station_id
+        
+        -- Find game ID for this station
+        local gameId = nil
+        for gId, dbId in pairs(StationDBMapping) do
+            if dbId == stationId then
+                gameId = gId
+                break
+            end
+        end
+        
+        if not gameId then
+            TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+            return
+        end
+        
+        -- Check if player can manage this station (owner or admin)
+        local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
+        if not canManage then
+            TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to manage DJ entities", "error")
+            return
+        end
+        
         local data = entity.data and json.decode(entity.data) or {}
         
         -- Update colorSpec
@@ -834,11 +1070,76 @@ RegisterNetEvent('pickle_dj:updateAllLightControls', function(stationId, propert
     end
 end)
 
+-- Load whitelist for a station (returns cached data)
+function LoadStationWhitelist(dbId)
+    return StationWhitelists[dbId] or {}
+end
+
+-- Check if player has whitelist access to station
+function CheckWhitelistAccess(source, stationId)
+    local dbId = StationDBMapping[stationId]
+    if not dbId then return true end -- No mapping means allow
+    
+    local whitelist = LoadStationWhitelist(dbId)
+    
+    -- No whitelist entries means open access
+    if not whitelist or #whitelist == 0 then
+        return true
+    end
+    
+    local playerIdentifier = GetIdentifier(source)
+    if not playerIdentifier then return false end
+    
+    -- Get player job info
+    local jobName = nil
+    local jobRank = 0
+    
+    if GetResourceState('es_extended') == 'started' then
+        local ESX = exports.es_extended:getSharedObject()
+        local xPlayer = ESX.GetPlayerFromId(source)
+        if xPlayer then
+            jobName = xPlayer.job.name
+            jobRank = xPlayer.job.grade
+        end
+    elseif GetResourceState('qb-core') == 'started' then
+        local QBCore = exports['qb-core']:GetCoreObject()
+        local xPlayer = QBCore.Functions.GetPlayer(source)
+        if xPlayer and xPlayer.PlayerData then
+            jobName = xPlayer.PlayerData.job.name
+            jobRank = xPlayer.PlayerData.job.grade.level
+        end
+    end
+    
+    -- Check whitelist entries
+    for _, entry in ipairs(whitelist) do
+        if entry.type == 'player' and entry.value == playerIdentifier then
+            return true
+        elseif entry.type == 'job' and entry.value == jobName and jobRank >= entry.rank then
+            return true
+        elseif entry.type == 'ace' and IsPlayerAceAllowed(source, entry.value) then
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- Callback to check if player can access DJ station interaction (menu)
+lib.callback.register('pickle_dj:canAccessStationInteraction', function(source, stationId)
+    return CanInteractWithStation(source, stationId)
+end)
+
 -- Callback to check if player can access DJ controller
 lib.callback.register('pickle_dj:canAccessController', function(source, stationId)
     local station = DJStations[stationId]
     if not station or not station.streamId then
         return false, "Station not found"
+    end
+    
+    -- Check whitelist first (if whitelist exists, must be on it)
+    local canAccess, canManage, errorMessage = CanInteractWithStation(source, stationId)
+    if not canAccess then
+        return false, errorMessage
     end
     
     -- Get the music instance for this station
@@ -1042,6 +1343,226 @@ RegisterNetEvent('pickle_dj:updateParticleEffect', function(stationId, effect, v
     
     -- Network the update to all clients
     TriggerClientEvent('pickle_dj:particleEffectsUpdated', -1, stationId, effect, value)
+end)
+
+-- Load whitelist when station is loaded
+function LoadStationWhitelistOnStart()
+    MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_whitelist`", {}, function(results)
+        if results then
+            for _, entry in ipairs(results) do
+                if not StationWhitelists[entry.station_id] then
+                    StationWhitelists[entry.station_id] = {}
+                end
+                table.insert(StationWhitelists[entry.station_id], {
+                    id = entry.id,
+                    type = entry.type,
+                    value = entry.value,
+                    name = entry.name,
+                    rank = entry.rank or 0
+                })
+            end
+        end
+    end)
+end
+
+-- Reload whitelist for a specific station
+function ReloadStationWhitelist(dbId)
+    StationWhitelists[dbId] = nil
+    MySQL.Async.fetchAll(
+        "SELECT * FROM `pickle_dj_whitelist` WHERE `station_id` = @station_id",
+        {
+            ['@station_id'] = dbId
+        },
+        function(results)
+            StationWhitelists[dbId] = {}
+            if results then
+                for _, entry in ipairs(results) do
+                    table.insert(StationWhitelists[dbId], {
+                        id = entry.id,
+                        type = entry.type,
+                        value = entry.value,
+                        name = entry.name,
+                        rank = entry.rank or 0
+                    })
+                end
+            end
+        end
+    )
+end
+
+-- Get nearby players for whitelist
+lib.callback.register('pickle_dj:getNearbyPlayers', function(source, coords, radius)
+    local nearbyPlayers = {}
+    local playerCoords = coords or GetEntityCoords(GetPlayerPed(source))
+    local searchRadius = radius or 10.0
+    
+    for _, playerId in ipairs(GetPlayers()) do
+        local targetId = tonumber(playerId)
+        if targetId and targetId ~= source then
+            local targetPed = GetPlayerPed(targetId)
+            if targetPed and targetPed > 0 then
+                local targetCoords = GetEntityCoords(targetPed)
+                local distance = #(playerCoords - targetCoords)
+                
+                if distance <= searchRadius then
+                    local identifier = GetIdentifier(targetId)
+                    local name = GetPlayerCharacterName(targetId)
+                    if identifier then
+                        table.insert(nearbyPlayers, {
+                            serverId = targetId,
+                            identifier = identifier,
+                            name = name or "Unknown",
+                            distance = math.floor(distance)
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Sort by distance
+    table.sort(nearbyPlayers, function(a, b) return a.distance < b.distance end)
+    
+    return nearbyPlayers
+end)
+
+-- Get whitelist for a station
+lib.callback.register('pickle_dj:getWhitelist', function(source, gameId)
+    local station = DJStations[gameId]
+    if not station then return {} end
+    
+    local dbId = StationDBMapping[gameId]
+    if not dbId then return {} end
+    
+    -- Check if player can manage whitelist
+    local isAdmin = IsPlayerAdmin(source)
+    local playerIdentifier = GetIdentifier(source)
+    local isOwner = playerIdentifier and station.identifier and station.identifier == playerIdentifier
+    
+    if not isAdmin and not isOwner then
+        return {}
+    end
+    
+    return LoadStationWhitelist(dbId)
+end)
+
+-- Add to whitelist
+RegisterServerEvent('pickle_dj:addWhitelist', function(gameId, whitelistType, value, name, rank)
+    local source = source
+    
+    local station = DJStations[gameId]
+    if not station then
+        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        return
+    end
+    
+    local dbId = StationDBMapping[gameId]
+    if not dbId then
+        TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+        return
+    end
+    
+    -- Check permissions
+    local isAdmin = IsPlayerAdmin(source)
+    local playerIdentifier = GetIdentifier(source)
+    local isOwner = playerIdentifier and station.identifier and station.identifier == playerIdentifier
+    
+    if not isAdmin and not isOwner then
+        TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to manage whitelist", "error")
+        return
+    end
+    
+    -- Non-admin owners can only add players
+    if not isAdmin and isOwner and whitelistType ~= 'player' then
+        TriggerClientEvent('pickle_dj:notify', source, "You can only add players to the whitelist", "error")
+        return
+    end
+    
+    -- Insert into database
+    MySQL.Async.insert(
+        "INSERT INTO `pickle_dj_whitelist` (`station_id`, `type`, `value`, `name`, `rank`) VALUES (@station_id, @type, @value, @name, @rank)",
+        {
+            ['@station_id'] = dbId,
+            ['@type'] = whitelistType,
+            ['@value'] = value,
+            ['@name'] = name or nil,
+            ['@rank'] = rank or 0
+        },
+        function(insertId)
+            if insertId then
+                -- Reload whitelist cache
+                ReloadStationWhitelist(dbId)
+                TriggerClientEvent('pickle_dj:notify', source, "Added to whitelist", "success")
+            else
+                TriggerClientEvent('pickle_dj:notify', source, "Failed to add to whitelist", "error")
+            end
+        end
+    )
+end)
+
+-- Remove from whitelist
+RegisterServerEvent('pickle_dj:removeWhitelist', function(gameId, whitelistId)
+    local source = source
+    
+    local station = DJStations[gameId]
+    if not station then
+        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        return
+    end
+    
+    local dbId = StationDBMapping[gameId]
+    if not dbId then
+        TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+        return
+    end
+    
+    -- Check permissions
+    local isAdmin = IsPlayerAdmin(source)
+    local playerIdentifier = GetIdentifier(source)
+    local isOwner = playerIdentifier and station.identifier and station.identifier == playerIdentifier
+    
+    if not isAdmin and not isOwner then
+        TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to manage whitelist", "error")
+        return
+    end
+    
+    -- Check if entry exists and get its type
+    MySQL.Async.fetchAll(
+        "SELECT `type` FROM `pickle_dj_whitelist` WHERE `id` = @id AND `station_id` = @station_id",
+        {
+            ['@id'] = whitelistId,
+            ['@station_id'] = dbId
+        },
+        function(results)
+            if not results or #results == 0 then
+                TriggerClientEvent('pickle_dj:notify', source, "Whitelist entry not found", "error")
+                return
+            end
+            
+            -- Non-admin owners can only remove players
+            if not isAdmin and isOwner and results[1].type ~= 'player' then
+                TriggerClientEvent('pickle_dj:notify', source, "You can only remove players from the whitelist", "error")
+                return
+            end
+            
+            -- Delete from database
+            MySQL.Async.execute(
+                "DELETE FROM `pickle_dj_whitelist` WHERE `id` = @id",
+                {
+                    ['@id'] = whitelistId
+                },
+                function(affectedRows)
+                    if affectedRows > 0 then
+                        -- Reload whitelist cache
+                        ReloadStationWhitelist(dbId)
+                        TriggerClientEvent('pickle_dj:notify', source, "Removed from whitelist", "success")
+                    else
+                        TriggerClientEvent('pickle_dj:notify', source, "Failed to remove from whitelist", "error")
+                    end
+                end
+            )
+        end
+    )
 end)
 
 -- Request particle effects state for a station
