@@ -6,6 +6,10 @@ function ShowNotification(text)
 	ESX.ShowNotification(text)
 end
 
+function ServerCallback(name, cb, ...)
+    ESX.TriggerServerCallback(name, cb,  ...)
+end
+
 function CanAccessGroup(data)
     if not data then return true end
     local pdata = ESX.GetPlayerData()
@@ -51,7 +55,7 @@ end)
 
 RegisterNetEvent('esx:playerLoaded')
 AddEventHandler('esx:playerLoaded',function(xPlayer, isNew, skin)
-    TriggerServerEvent("pickle_policejob:initializePlayer")
+    TriggerServerEvent("pickle_casinos:initializePlayer")
 end)
 
 function ToggleOutfit(onduty)
@@ -71,10 +75,6 @@ function ToggleOutfit(onduty)
     end
 end
 
-function OpenNearbyInventory()
-    Config.Integrations.inventory.OpenNearbyInventory()
-end
-
 -- Inventory Fallback
 
 CreateThread(function()
@@ -88,16 +88,12 @@ CreateThread(function()
     
     Inventory.Ready = false
     
-    Inventory.OpenStash = function(stash, isPersonalStash)
-        ShowNotification("Your inventory does not support stashes, please make a ticket at https://discord.gg/picklemods")
-    end
-
-    RegisterNetEvent("pickle_policejob:setupInventory", function(items)
-        Inventory.Items = items
+    RegisterNetEvent("pickle_casinos:setupInventory", function(data)
+        Inventory.Items = data.items
         Inventory.Ready = true
     end)
     
-    RegisterNetEvent("pickle_policejob:updateInventory", function(inventory) 
+    RegisterNetEvent("pickle_casinos:updateInventory", function(inventory) 
         -- RefreshInventory(inventory)
     end)
 end)

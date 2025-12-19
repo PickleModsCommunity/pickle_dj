@@ -2,6 +2,10 @@ if GetResourceState('es_extended') ~= 'started' then return end
 
 ESX = exports.es_extended:getSharedObject()
 
+function RegisterCallback(name, cb)
+    ESX.RegisterServerCallback(name, cb)
+end
+
 function RegisterUsableItem(...)
     ESX.RegisterUsableItem(...)
 end
@@ -11,7 +15,7 @@ function ShowNotification(target, text)
 end
 
 function GetIdentifier(source)
-    local xPlayer = ESX.GetPlayerFromId(tonumber(source))
+    local xPlayer = ESX.GetPlayerFromId(source)
     if not xPlayer or not xPlayer.identifier then return end
     return xPlayer.identifier
 end
@@ -23,20 +27,8 @@ end
 
 function GetPlayerCharacterName(source)
     local xPlayer = ESX.GetPlayerFromId(source)
-    if not xPlayer then return "ERR_UNK_NAME" end
+    if not xPlayer then return "Unknown Name" end
     return xPlayer.getName()
-end
-
-function GetPlayerDateOfBirth(source)
-    local xPlayer = ESX.GetPlayerFromId(source)
-    if not xPlayer then return "Unknown" end
-    return xPlayer.get('dateofbirth')
-end
-
-function GetPlayerGender(source)
-    local xPlayer = ESX.GetPlayerFromId(source)
-    if not xPlayer then return "Unknown" end
-    return xPlayer.sex == 0 and _L("male") or _L("female")
 end
 
 function CanAccessGroup(source, data)
@@ -70,12 +62,10 @@ function AddMoney(source, count, currency)
     local currency = currency or "money"
     if (currency == "money") then
         xPlayer.addMoney(count)
-    elseif (currency == "bank") then
-        xPlayer.addAccountMoney("bank", count)
     elseif (currency == "dirty") then
         xPlayer.addAccountMoney("black_money", count)
     end
-    TriggerClientEvent("pickle_policejob:updateMoney", source, GetMoney(source, currency))
+    TriggerClientEvent("pickle_casinos:updateMoney", source, GetMoney(source, currency))
 end
 
 function RemoveMoney(source, count, currency)
@@ -83,12 +73,10 @@ function RemoveMoney(source, count, currency)
     local currency = currency or "money"
     if (currency == "money") then
         xPlayer.removeMoney(count)
-    elseif (currency == "bank") then
-        xPlayer.removeAccountMoney("bank", count)
     elseif (currency == "dirty") then
         xPlayer.removeAccountMoney("black_money", count)
     end
-    TriggerClientEvent("pickle_policejob:updateMoney", source, GetMoney(source, currency))
+    TriggerClientEvent("pickle_casinos:updateMoney", source, GetMoney(source, currency))
 end
 
 function GetMoney(source, currency)
@@ -97,17 +85,11 @@ function GetMoney(source, currency)
     local money = 0
     if (currency == "money") then
         money = xPlayer.getMoney()
-    elseif (currency == "bank") then
-        money = xPlayer.getAccount("bank").money
     elseif (currency == "dirty") then
         money = xPlayer.getAccount("black_money").money
     end    
-    TriggerClientEvent("pickle_policejob:updateMoney", source, money)
+    TriggerClientEvent("pickle_casinos:updateMoney", source, money)
     return money
-end
-
-function ImpoundVehiclePlate(plate)
-    MySQL.query("UPDATE owned_vehicles SET stored = 0 WHERE plate = ?", { plate })
 end
 
 function GetOwnedVehicleFromPlate(plate)
@@ -141,21 +123,13 @@ end
 function GetPlayerJob(source)
     local xPlayer = ESX.GetPlayerFromId(tonumber(source))
     if not xPlayer then return "Unknown Job", "Unknown Grade" end
-    return {name = xPlayer.job.name, label = xPlayer.job.label, rank_label = xPlayer.job.grade_label}
+    return {label = xPlayer.job.label, rank_label = xPlayer.job.grade_label}
 end
 
 function SetPlayerJob(source, job, grade)
     local xPlayer = ESX.GetPlayerFromId(tonumber(source))
     if not xPlayer then return end
     xPlayer.setJob(job, grade)
-end
-
-function SetPlayerFrameworkDuty(source, onDuty)
-    local xPlayer = ESX.GetPlayerFromId(tonumber(source))
-    if not xPlayer then return end
-    local jobName, jobGrade = GetPlayerDepartmentJob(source)
-    if not jobName or (not onDuty and not Config.DefaultJob.usePrefixDuty) then return xPlayer.setJob("unemployed", 0) end
-    xPlayer.setJob((onDuty and "" or "off")..jobName, jobGrade)
 end
 
 function IsPlayerAdmin(source)
@@ -198,20 +172,6 @@ function AddOwnedVehicle(source, model)
     })
 end
 
-function GetPlayerStatus(source)
-    local p = promise.new()
-    local maxValue = 1000000
-    TriggerEvent("esx_status:getStatus", source, 'drunk', function(status)
-        p:resolve(0.40 * (status.val / maxValue))
-    end)
-    local bac = Citizen.Await(p)
-    return {Alcohol = math.floor(bac * 100) / 100}
-end
-
-AddEventHandler('esx:setJob', function(source, job, lastJob)
-    EnsurePlayerDuty(source)
-end)
-
 -- Inventory Fallback
 
 CreateThread(function()
@@ -246,9 +206,7 @@ CreateThread(function()
                     name = item.name,
                     label = item.label,
                     count = item.count,
-                    weight = item.weight,
-                    slot = -1,
-                    metadata = {}
+                    weight = item.weight
                 }
             end
         end
@@ -257,7 +215,7 @@ CreateThread(function()
 
     Inventory.UpdateInventory = function(source)
         SetTimeout(1000, function()
-            TriggerClientEvent("pickle_policejob:updateInventory", source, Inventory.GetInventory(source))
+            TriggerClientEvent("pickle_casinos:updateInventory", source, Inventory.GetInventory(source))
         end)
     end
 
@@ -274,10 +232,6 @@ CreateThread(function()
     end
 
     Inventory.AddWeapon = function(source, name, count, metadata) -- Metadata is not required.
-        if Config.WeaponsAreItems then 
-            Inventory.AddItem(source, name, count, metadata)
-            return
-        end
         local xPlayer = ESX.GetPlayerFromId(source)
         xPlayer.addWeapon(name, 0)
         Inventory.UpdateInventory(source)
@@ -300,8 +254,8 @@ CreateThread(function()
         return xPlayer.hasWeapon(name)
     end
 
-    lib.callback.register("pickle_policejob:getInventory", function(source)
-        return Inventory.GetInventory(source)
+    RegisterCallback("pickle_casinos:getInventory", function(source, cb)
+        cb(Inventory.GetInventory(source))
     end)
     
     if GetResourceState("ox_inventory") == "started" then 

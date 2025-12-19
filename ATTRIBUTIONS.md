@@ -1,12 +1,10 @@
-# pickle_policejob
+# pickle_clubs
 
 Thank you to the following who helped make this happen!
 
-# NukePUG Designs
-Stab Sticks, Yellow Rope for Grappler
+# kadfilm (FX Lighting)
 
-# RogueThunder
-Grappler Model
+https://www.youtube.com/@KADFILM
 
-# FreePik
-Bodycam Logo
+Really appreciate kad for allowing me to use their lighting as a dependency - big shoutout to them!
+

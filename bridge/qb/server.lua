@@ -1,7 +1,10 @@
 if GetResourceState('qb-core') ~= 'started' then return end
 
 QBCore = exports['qb-core']:GetCoreObject()
-ExternalStatus = { Alcohol = {} }
+
+function RegisterCallback(name, cb)
+    QBCore.Functions.CreateCallback(name, cb)
+end
 
 function RegisterUsableItem(...)
     QBCore.Functions.CreateUseableItem(...)
@@ -24,7 +27,7 @@ end
 
 function GetPlayerCharacterName(source)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    if not xPlayer or not xPlayer.PlayerData then return "ERR_UNK_NAME" end
+    if not xPlayer or not xPlayer.PlayerData then return "Unknown Name" end
     return xPlayer.PlayerData.charinfo.firstname .. " " .. xPlayer.PlayerData.charinfo.lastname
 end
 
@@ -59,13 +62,11 @@ function AddMoney(source, count, currency)
     local currency = currency or "money"
     if (currency == "money") then
         xPlayer.Functions.AddMoney('cash', count)
-    elseif (currency == "bank") then
-        xPlayer.Functions.AddMoney('bank', count)
     elseif (currency == "dirty") then
         local setting = Config.FrameworkSettings.dirtyMoney
         Inventory.AddItem(source, setting == "DEFAULT" and 'dirty_money' or setting, count)
     end
-    TriggerClientEvent("pickle_policejob:updateMoney", source, money)
+    TriggerClientEvent("pickle_casinos:updateMoney", source, money)
 end
 
 function RemoveMoney(source, count, currency)
@@ -73,13 +74,11 @@ function RemoveMoney(source, count, currency)
     local currency = currency or "money"
     if (currency == "money") then
         xPlayer.Functions.RemoveMoney('cash', count)
-    elseif (currency == "bank") then
-        xPlayer.Functions.RemoveMoney('bank', count)
     elseif (currency == "dirty") then
         local setting = Config.FrameworkSettings.dirtyMoney
         Inventory.RemoveItem(source, setting == "DEFAULT" and 'dirty_money' or setting, count)
     end
-    TriggerClientEvent("pickle_policejob:updateMoney", source, money)
+    TriggerClientEvent("pickle_casinos:updateMoney", source, money)
 end
 
 function GetMoney(source, currency)
@@ -88,13 +87,11 @@ function GetMoney(source, currency)
     local money = 0
     if (currency == "money") then
         money = xPlayer.PlayerData.money.cash
-    elseif (currency == "bank") then
-        money = xPlayer.PlayerData.money.bank
     elseif (currency == "dirty") then
         local setting = Config.FrameworkSettings.dirtyMoney
         money = Inventory.GetItemCount(source, setting == "DEFAULT" and 'dirty_money' or setting)
     end
-    TriggerClientEvent("pickle_policejob:updateMoney", source, money)
+    TriggerClientEvent("pickle_casinos:updateMoney", source, money)
     return money
 end
 
@@ -139,42 +136,15 @@ function UpdateVehiclePlate(source, plate, newPlate)
     })
 end
 
-function ImpoundVehiclePlate(plate)
-    MySQL.query("UPDATE player_vehicles SET state = 0 WHERE plate = ?", { plate })
-end
-
-function GetPlayerDateOfBirth(source)
-    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    if not xPlayer then return "Unknown" end
-    return xPlayer.PlayerData.charinfo.dob
-end
-
-function GetPlayerGender(source)
-    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    if not xPlayer then return "Unknown" end
-    return xPlayer.PlayerData.charinfo.gender == 0 and _L("male") or _L("female")
-end
-
 function GetPlayerJob(source)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
     if not xPlayer then return end
-    return {name = xPlayer.PlayerData.job.name, label = xPlayer.PlayerData.job.label, rank_label = xPlayer.PlayerData.job.grade.name}
+    return {label = xPlayer.PlayerData.job.label, rank_label = xPlayer.PlayerData.job.grade.name}
 end
 
 function SetPlayerJob(source, job, grade)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    if not xPlayer then return end
     xPlayer.Functions.SetJob(job, grade)
-    xPlayer.Functions.SetJobDuty(true)
-end
-
-function SetPlayerFrameworkDuty(source, onDuty)
-    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    if not xPlayer then return end
-    local jobName, jobGrade = GetPlayerDepartmentJob(source)
-    if not jobName then return xPlayer.Functions.SetJobDuty(false) end
-    xPlayer.Functions.SetJob(jobName, jobGrade)
-    xPlayer.Functions.SetJobDuty(onDuty)
 end
 
 function IsPlayerAdmin(source)
@@ -188,50 +158,13 @@ function IsPlayerAdmin(source)
     return false
 end
 
-function GetPlayerStatus(source)
-    return {Alcohol = 0}
-end
-
-AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
-    local jobName, jobGrade = GetPlayerDepartmentJob(source)
-    if not jobName then return end
-    if IsPlayerOnDuty(source) and (job.name ~= jobName or not job.onduty) then
-        SetPlayerDuty(false)
-    elseif not IsPlayerOnDuty(source) and (job.name == jobName and not job.onduty) then
-        SetPlayerDuty(true)
-    end
-end)
-
--- Evidence Status Support (For Breathalyzer)
-
-RegisterNetEvent("evidence:server:UpdateStatus", function(status)
-    local source = source
-    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    if not xPlayer then return end
-    local bac = 0.0
-    if status.heavyalcohol then
-        bac = 0.40 * ((status.heavyalcohol.time or 0) / 300)
-    elseif status.alcohol then
-        bac = 0.20 * ((status.alcohol.time or 0) / 300)
-    end
-    ExternalStatus.Alcohol[source] = math.floor(bac * 100) / 100 -- Format to 2 decimal places
-end)
-
-RegisterNetEvent("police:server:SeizeDriverLicense", function(targetId)
-    local source = source
-    if #(GetEntityCoords(GetPlayerPed(source)) - GetEntityCoords(GetPlayerPed(targetId))) > 3.0 then return end
-    local xPlayer = QBCore.Functions.GetPlayer(tonumber(targetId))
-    if not xPlayer then return end
-    local licenses = xPlayer.PlayerData.metadata['licences'] or {}
-    local driverLicense = licenses['driver']
-    if driverLicense then
-        licenses['driver'] = false
-        xPlayer.Functions.SetMetaData('licences', licenses)
-        ShowNotification(targetId, _L("drivers_license_seized"))
+function AddSocietyMoney(name, amount)
+    if Config.FrameworkSettings.society == "qb-management" then
+        exports["qb-management"]:AddMoney(name, amount)
     else
-        ShowNotification(source, _L("target_no_driver_license"))
+        exports["qb-banking"]:AddMoney(name, amount)
     end
-end)
+end
 
 -- Inventory Fallback
 
@@ -240,25 +173,6 @@ CreateThread(function()
     
     if InitializeInventory then return InitializeInventory() end -- Already loaded through inventory folder.
     
-    -- Search Player
-
-    RegisterNetEvent("pickle_policejob:searchPlayer", function()
-        local src = source
-        local player, distance = QBCore.Functions.GetClosestPlayer(src)
-        if player ~= -1 and distance < 2.5 then
-            exports['qb-inventory']:OpenInventoryById(src, tonumber(player))
-            ShowNotification(tonumber(player), _L("search_started"))
-        else
-            ShowNotification(src, _L("no_player_nearby"))
-        end
-    end)
-
-    RegisterNetEvent("pickle_policejob:openStash", function(stash, isPersonalStash)
-        local source = source
-        local citizenId = GetIdentifier(source)
-        exports['qb-inventory']:OpenInventory(source, stash .. (isPersonalStash and ("_" .. citizenId) or ""))
-    end)
-
     Inventory = {}
 
     Inventory.Items = {}
@@ -281,9 +195,7 @@ CreateThread(function()
                 name = item.name,
                 label = item.label,
                 count = item.amount,
-                weight = item.weight,
-                slot = slot,
-                metadata = item.info or item.metadata
+                weight = item.weight
             }
         end
         return items
@@ -291,7 +203,7 @@ CreateThread(function()
 
     Inventory.UpdateInventory = function(source)
         SetTimeout(1000, function()
-            TriggerClientEvent("pickle_policejob:updateInventory", source, Inventory.GetInventory(source))
+            TriggerClientEvent("pickle_casinos:updateInventory", source, Inventory.GetInventory(source))
         end)
     end
 
@@ -326,8 +238,8 @@ CreateThread(function()
         return (Inventory.GetItemCount(source, name) > 0)
     end
 
-    lib.callback.register("pickle_policejob:getInventory", function(source)
-        return Inventory.GetInventory(source)
+    RegisterCallback("pickle_casinos:getInventory", function(source, cb)
+        cb(Inventory.GetInventory(source))
     end)
 
     for item, data in pairs(QBCore.Shared.Items) do
