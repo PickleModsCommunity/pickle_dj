@@ -408,6 +408,12 @@ export default function MusicController() {
     };
 
     const stopBroadcastAndClose = async () => {
+        // Open confirmation dialog
+        setIsStopBroadcastDialogOpen(true);
+    };
+
+    const confirmStopBroadcast = async () => {
+        setIsStopBroadcastDialogOpen(false);
         await stopBroadcast();
         // Close the UI - set visible state first, then notify client
         setVisible(false);
@@ -1142,6 +1148,7 @@ export default function MusicController() {
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [addDialogDeck, setAddDialogDeck] = useState<"track_1" | "track_2">("track_1");
     const [addDialogUrl, setAddDialogUrl] = useState("");
+    const [isStopBroadcastDialogOpen, setIsStopBroadcastDialogOpen] = useState(false);
 
     // Estimate BPM via simple onset-envelope autocorrelation (downsampled to ~200 Hz)
     function estimateBpmFromBuffer(buffer: AudioBuffer): number | null {
@@ -2279,6 +2286,67 @@ export default function MusicController() {
 									<span>Choose Files…</span>
 								</label>
 							</div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {isStopBroadcastDialogOpen && (
+                <div 
+                    className="modalBackdrop" 
+                    role="dialog" 
+                    aria-modal="true" 
+                    aria-labelledby="stop-broadcast-title"
+                    onClick={(e) => {
+                        if (e.target === e.currentTarget) {
+                            setIsStopBroadcastDialogOpen(false);
+                        }
+                    }}
+                >
+                    <div className="modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modalHeader">
+                            <h3 id="stop-broadcast-title" style={{ margin: 0, fontSize: 16 }}>Stop Broadcasting?</h3>
+                            <button 
+                                className="resetBtn" 
+                                onClick={() => setIsStopBroadcastDialogOpen(false)} 
+                                aria-label="Close confirmation dialog"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <div className="modalBody">
+                            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                <p style={{ margin: 0, fontSize: 14, color: "#ccc", lineHeight: 1.6 }}>
+                                    Are you sure you want to stop broadcasting?
+                                </p>
+                                <p style={{ margin: 0, fontSize: 13, color: "#999", lineHeight: 1.5 }}>
+                                    This will:
+                                </p>
+                                <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#999", lineHeight: 1.8 }}>
+                                    <li>Stop the broadcast</li>
+                                    <li>Clear all playlists</li>
+                                    <li>Reset all settings to defaults</li>
+                                    <li>Close the controller</li>
+                                </ul>
+                                <p style={{ margin: 0, fontSize: 13, color: "#888", lineHeight: 1.5, fontStyle: "italic" }}>
+                                    💡 Tip: If you want to keep the music playing, press <strong>ESC</strong> instead to close the controller without stopping the broadcast.
+                                </p>
+                            </div>
+                        </div>
+                        <div className="modalActions">
+                            <button
+                                className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80"
+                                onClick={() => setIsStopBroadcastDialogOpen(false)}
+                                style={{ cursor: "pointer" }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="bg-red-600 px-4 py-2 rounded-md text-white shadow-xs hover:bg-red-700"
+                                onClick={confirmStopBroadcast}
+                                style={{ cursor: "pointer" }}
+                            >
+                                Stop Broadcasting
+                            </button>
                         </div>
                     </div>
                 </div>

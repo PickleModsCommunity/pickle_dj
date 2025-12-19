@@ -188,6 +188,7 @@ function RegisterDJStation(station, skipSync)
         lights = station.lights,
         smokemachines = station.smokemachines,
         lightControls = lightControls,
+        identifier = station.identifier, -- Include identifier for client-side ownership checks
     }
     TriggerClientEvent('pickle_dj:registerDJStation', -1, id, stationData)
     return id
@@ -371,10 +372,13 @@ end
 RegisterServerEvent('pickle_dj:saveStation', function(stationData)
     local source = source
     
-    -- Check admin permission
-    if not IsPlayerAdmin(source) then
-        TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to create DJ stations", "error")
-        return
+    -- Check admin permission only if not placing from item
+    -- Items allow anyone to place stations, /createdj command requires admin
+    if not stationData.fromItem then
+        if not IsPlayerAdmin(source) then
+            TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to create DJ stations", "error")
+            return
+        end
     end
     
     local identifier = GetIdentifier(source)
@@ -464,10 +468,38 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
                         lights = stationData.lights,
                         lightControls = lightControls,
                         streamId = streamId,
+                        identifier = identifier, -- Include identifier for ownership checks
                     }, false)
                     
                     -- Store mapping
                     StationDBMapping[id] = stationInsertId
+                    
+                    -- Ensure identifier is set in the station (in case it wasn't passed)
+                    if DJStations[id] then
+                        DJStations[id].identifier = identifier
+                    end
+                    
+                    -- Re-sync the station to all clients with the identifier included
+                    -- (RegisterDJStation already synced, but we need to update with identifier)
+                    local stationDataToSync = {
+                        name = stationData.name,
+                        coords = stationData.coords,
+                        heading = stationData.heading,
+                        prop = stationData.prop,
+                        speakers = stationData.speakers,
+                        lights = stationData.lights,
+                        smokemachines = stationData.smokemachines or nil,
+                        lightControls = lightControls,
+                        identifier = identifier, -- Include identifier for client-side checks
+                    }
+                    TriggerClientEvent('pickle_dj:registerDJStation', -1, id, stationDataToSync)
+                    
+                    -- If created from item, remove item from inventory
+                    if stationData.fromItem then
+                        if Inventory and Inventory.RemoveItem then
+                            Inventory.RemoveItem(source, 'dj_deck_advanced', 1)
+                        end
+                    end
                     
                     TriggerClientEvent('pickle_dj:notify', source, "DJ station created successfully!", "success")
                     debugPrint(("^2[pickle_dj]^0 DJ station '%s' created by %s (DB ID: %s, Game ID: %s)"):format(stationData.name, identifier, stationInsertId, id))
@@ -723,7 +755,7 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
     local source = source
     
     -- Get entity info to find station first
-    MySQL.Async.fetchAll("SELECT station_id, entity_type FROM `pickle_dj_entities` WHERE id = @id", {
+    MySQL.Async.fetchAll("SELECT station_id, entity_type, data FROM `pickle_dj_entities` WHERE id = @id", {
         ['@id'] = entityId
     }, function(results)
         if not results or #results == 0 then
@@ -732,6 +764,8 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
         end
         
         local stationId = results[1].station_id
+        local entityType = results[1].entity_type
+        local entityData = results[1].data and json.decode(results[1].data) or {}
         
         -- Find game ID for this station
         local gameId = nil
@@ -759,6 +793,33 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
             ['@id'] = entityId
         }, function(affectedRows)
             if affectedRows > 0 then
+                -- Return item to player based on entity type
+                local itemToReturn = nil
+                if entityType == "speaker" then
+                    local speakerType = entityData.speakerType
+                    if speakerType == "speaker_1" then
+                        itemToReturn = "dj_speaker_large"
+                    elseif speakerType == "speaker_2" then
+                        itemToReturn = "dj_speaker_medium"
+                    elseif speakerType == "speaker_3" then
+                        itemToReturn = "dj_speaker_small"
+                    end
+                elseif entityType == "light" then
+                    local lightType = entityData.lightType
+                    if lightType == "ambient" then
+                        itemToReturn = "dj_light_ambient"
+                    elseif lightType == "spotlight" then
+                        itemToReturn = "dj_light_spotlight"
+                    elseif lightType == "barlight" then
+                        itemToReturn = "dj_light_barlight"
+                    end
+                end
+                
+                if itemToReturn and Inventory and Inventory.AddItem then
+                    Inventory.AddItem(source, itemToReturn, 1)
+                    TriggerClientEvent('pickle_dj:notify', source, "Item returned to inventory: " .. itemToReturn, "success")
+                end
+                
                 if gameId then
                     -- Reload entities for this station
                     MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_entities` WHERE station_id = @station_id", {
@@ -1643,4 +1704,255 @@ CreateThread(function()
             end
         end
     end
+end)
+
+-- Item Usage Handlers
+-- Find item name in config by item value
+local function FindItemInConfig(itemName)
+    -- Check DJ Stations
+    for stationName, stationData in pairs(Config.DJStations) do
+        if stationData.item == itemName then
+            return "station", stationName, stationData
+        end
+    end
+    
+    -- Check Speaker Props
+    for speakerKey, speakerData in pairs(Config.SpeakerProps) do
+        if speakerData.item == itemName then
+            return "speaker", speakerKey, speakerData
+        end
+    end
+    
+    -- Check Light Types
+    for lightKey, lightData in pairs(Config.LightTypes) do
+        if lightData.item == itemName then
+            return "light", lightKey, lightData
+        end
+    end
+    
+    return nil, nil, nil
+end
+
+-- Register station item usage (dj_deck_advanced)
+RegisterUsableItem('dj_deck_advanced', function(source, item)
+    local itemType, configKey, configData = FindItemInConfig('dj_deck_advanced')
+    if itemType ~= "station" then
+        TriggerClientEvent('pickle_dj:notify', source, "Invalid item configuration", "error")
+        return
+    end
+    
+    -- Trigger client to start station placement
+    TriggerClientEvent('pickle_dj:useStationItem', source, configData.prop, configKey)
+end)
+
+-- Register speaker item usage
+RegisterUsableItem('dj_speaker_large', function(source, item)
+    TriggerClientEvent('pickle_dj:useEntityItem', source, 'speaker', 'speaker_1')
+end)
+
+RegisterUsableItem('dj_speaker_medium', function(source, item)
+    TriggerClientEvent('pickle_dj:useEntityItem', source, 'speaker', 'speaker_2')
+end)
+
+RegisterUsableItem('dj_speaker_small', function(source, item)
+    TriggerClientEvent('pickle_dj:useEntityItem', source, 'speaker', 'speaker_3')
+end)
+
+-- Register light item usage
+RegisterUsableItem('dj_light_ambient', function(source, item)
+    TriggerClientEvent('pickle_dj:useEntityItem', source, 'light', 'ambient')
+end)
+
+RegisterUsableItem('dj_light_spotlight', function(source, item)
+    TriggerClientEvent('pickle_dj:useEntityItem', source, 'light', 'spotlight')
+end)
+
+RegisterUsableItem('dj_light_barlight', function(source, item)
+    TriggerClientEvent('pickle_dj:useEntityItem', source, 'light', 'barlight')
+end)
+
+-- Callback to check if player can use entity item (near manageable station)
+lib.callback.register('pickle_dj:canUseEntityItem', function(source)
+    local playerCoords = GetEntityCoords(GetPlayerPed(source))
+    local renderDistance = Config.RenderDistance or 100.0
+    
+    -- Find nearest manageable station
+    for gameId, station in pairs(DJStations) do
+        if station.coords then
+            local distance = #(playerCoords - station.coords)
+            if distance <= renderDistance then
+                -- Check if player can manage this station
+                local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
+                if canManage then
+                    return true, gameId
+                end
+            end
+        end
+    end
+    
+    return false, nil
+end)
+
+-- Event to confirm entity placement and remove item
+RegisterServerEvent('pickle_dj:confirmEntityPlacement', function(itemName)
+    local source = source
+    if Inventory and Inventory.RemoveItem then
+        Inventory.RemoveItem(source, itemName, 1)
+    end
+end)
+
+-- Event to confirm station placement and remove item
+RegisterServerEvent('pickle_dj:confirmStationPlacement', function(itemName)
+    local source = source
+    if Inventory and Inventory.RemoveItem then
+        Inventory.RemoveItem(source, itemName, 1)
+    end
+end)
+
+-- Remove DJ station
+RegisterServerEvent('pickle_dj:removeStation', function(gameId)
+    local source = source
+    
+    local station = DJStations[gameId]
+    if not station then
+        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        return
+    end
+    
+    -- Check if player can manage this station (owner or admin)
+    local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
+    if not canManage then
+        TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to remove this station", "error")
+        return
+    end
+    
+    -- Get database ID
+    local dbId = StationDBMapping[gameId]
+    if not dbId then
+        TriggerClientEvent('pickle_dj:notify', source, "Station database ID not found", "error")
+        return
+    end
+    
+    -- Get station data from database to determine which item to return
+    MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_stations` WHERE id = @id", {
+        ['@id'] = dbId
+    }, function(stationResults)
+        if not stationResults or #stationResults == 0 then
+            TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+            return
+        end
+        
+        local stationRow = stationResults[1]
+        local stationProp = stationRow.prop and tonumber(stationRow.prop) or nil
+        
+        -- Find which station item corresponds to this prop
+        local stationItemToReturn = nil
+        if stationProp then
+            for stationName, stationData in pairs(Config.DJStations) do
+                if stationData.prop == stationProp then
+                    stationItemToReturn = stationData.item
+                    break
+                end
+            end
+        end
+        
+        -- Get all entities for this station to refund items
+        MySQL.Async.fetchAll("SELECT * FROM `pickle_dj_entities` WHERE station_id = @station_id", {
+            ['@station_id'] = dbId
+        }, function(entityResults)
+            local itemsToRefund = {}
+            
+            -- Add station item to refund list
+            if stationItemToReturn then
+                table.insert(itemsToRefund, stationItemToReturn)
+            end
+            
+            -- Process entities and determine items to refund
+            if entityResults then
+                for _, entity in ipairs(entityResults) do
+                    local data = entity.data and json.decode(entity.data) or {}
+                    local itemToReturn = nil
+                    
+                    if entity.entity_type == "speaker" then
+                        local speakerType = data.speakerType
+                        if speakerType == "speaker_1" then
+                            itemToReturn = "dj_speaker_large"
+                        elseif speakerType == "speaker_2" then
+                            itemToReturn = "dj_speaker_medium"
+                        elseif speakerType == "speaker_3" then
+                            itemToReturn = "dj_speaker_small"
+                        end
+                    elseif entity.entity_type == "light" then
+                        local lightType = data.lightType
+                        if lightType == "ambient" then
+                            itemToReturn = "dj_light_ambient"
+                        elseif lightType == "spotlight" then
+                            itemToReturn = "dj_light_spotlight"
+                        elseif lightType == "barlight" then
+                            itemToReturn = "dj_light_barlight"
+                        end
+                    end
+                    
+                    if itemToReturn then
+                        table.insert(itemsToRefund, itemToReturn)
+                    end
+                end
+            end
+            
+            -- Delete all entities for this station first
+            MySQL.Async.execute("DELETE FROM `pickle_dj_entities` WHERE station_id = @station_id", {
+                ['@station_id'] = dbId
+            }, function(affectedRows)
+                debugPrint(("^2[pickle_dj]^0 Deleted %d entities for station %s"):format(affectedRows or 0, dbId))
+                
+                -- Delete whitelist entries
+                MySQL.Async.execute("DELETE FROM `pickle_dj_whitelist` WHERE station_id = @station_id", {
+                    ['@station_id'] = dbId
+                }, function(whitelistRows)
+                    debugPrint(("^2[pickle_dj]^0 Deleted %d whitelist entries for station %s"):format(whitelistRows or 0, dbId))
+                    
+                    -- Delete the station
+                    MySQL.Async.execute("DELETE FROM `pickle_dj_stations` WHERE id = @id", {
+                        ['@id'] = dbId
+                    }, function(stationRows)
+                        if stationRows > 0 then
+                            -- Remove from server-side tables
+                            DJStations[gameId] = nil
+                            StationDBMapping[gameId] = nil
+                            StationLightControls[gameId] = nil
+                            StationParticleEffects[gameId] = nil
+                            StationWhitelists[dbId] = nil
+                            
+                            -- Delete music instance if it exists
+                            if station.streamId then
+                                TriggerEvent('pickle_dj:deleteMusicInstance', station.streamId)
+                            end
+                            
+                            -- Refund all items to the player who deleted the station
+                            if Inventory and Inventory.AddItem then
+                                for _, itemName in ipairs(itemsToRefund) do
+                                    Inventory.AddItem(source, itemName, 1)
+                                end
+                                
+                                if #itemsToRefund > 0 then
+                                    TriggerClientEvent('pickle_dj:notify', source, "DJ station removed. " .. #itemsToRefund .. " item(s) returned to inventory", "success")
+                                else
+                                    TriggerClientEvent('pickle_dj:notify', source, "DJ station removed successfully", "success")
+                                end
+                            else
+                                TriggerClientEvent('pickle_dj:notify', source, "DJ station removed successfully", "success")
+                            end
+                            
+                            -- Notify all clients to remove the station
+                            TriggerClientEvent('pickle_dj:removeStation', -1, gameId)
+                            
+                            debugPrint(("^2[pickle_dj]^0 Station %s removed by %s (refunded %d items)"):format(gameId, GetIdentifier(source) or "unknown", #itemsToRefund))
+                        else
+                            TriggerClientEvent('pickle_dj:notify', source, "Failed to remove station from database", "error")
+                        end
+                    end)
+                end)
+            end)
+        end)
+    end)
 end)

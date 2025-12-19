@@ -2,10 +2,6 @@ if GetResourceState('qb-core') ~= 'started' then return end
 
 QBCore = exports['qb-core']:GetCoreObject()
 
-function ServerCallback(name, cb, ...)
-    QBCore.Functions.TriggerCallback(name, cb,  ...)
-end
-
 function ShowNotification(text)
 	QBCore.Functions.Notify(text)
 end
@@ -63,7 +59,7 @@ RegisterNetEvent(GetCurrentResourceName()..":showNotification", function(text)
 end)
 
 RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
-    TriggerServerEvent("pickle_casinos:initializePlayer")
+    TriggerServerEvent("pickle_dj:initializePlayer")
 end)
 
 -- Inventory Fallback
@@ -79,12 +75,12 @@ CreateThread(function()
     
     Inventory.Ready = false
     
-    RegisterNetEvent("pickle_casinos:setupInventory", function(data)
+    RegisterNetEvent("pickle_dj:setupInventory", function(data)
         Inventory.Items = data.items
         Inventory.Ready = true
     end)
     
-    RegisterNetEvent("pickle_casinos:updateInventory", function(inventory) 
+    RegisterNetEvent("pickle_dj:updateInventory", function(inventory) 
         -- RefreshInventory(inventory)
     end)
 end)

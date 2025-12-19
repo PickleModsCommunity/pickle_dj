@@ -2,10 +2,6 @@ if GetResourceState('es_extended') ~= 'started' then return end
 
 ESX = exports.es_extended:getSharedObject()
 
-function RegisterCallback(name, cb)
-    ESX.RegisterServerCallback(name, cb)
-end
-
 function RegisterUsableItem(...)
     ESX.RegisterUsableItem(...)
 end
@@ -65,7 +61,7 @@ function AddMoney(source, count, currency)
     elseif (currency == "dirty") then
         xPlayer.addAccountMoney("black_money", count)
     end
-    TriggerClientEvent("pickle_casinos:updateMoney", source, GetMoney(source, currency))
+    TriggerClientEvent("pickle_dj:updateMoney", source, GetMoney(source, currency))
 end
 
 function RemoveMoney(source, count, currency)
@@ -76,7 +72,7 @@ function RemoveMoney(source, count, currency)
     elseif (currency == "dirty") then
         xPlayer.removeAccountMoney("black_money", count)
     end
-    TriggerClientEvent("pickle_casinos:updateMoney", source, GetMoney(source, currency))
+    TriggerClientEvent("pickle_dj:updateMoney", source, GetMoney(source, currency))
 end
 
 function GetMoney(source, currency)
@@ -88,7 +84,7 @@ function GetMoney(source, currency)
     elseif (currency == "dirty") then
         money = xPlayer.getAccount("black_money").money
     end    
-    TriggerClientEvent("pickle_casinos:updateMoney", source, money)
+    TriggerClientEvent("pickle_dj:updateMoney", source, money)
     return money
 end
 
@@ -215,7 +211,7 @@ CreateThread(function()
 
     Inventory.UpdateInventory = function(source)
         SetTimeout(1000, function()
-            TriggerClientEvent("pickle_casinos:updateInventory", source, Inventory.GetInventory(source))
+            TriggerClientEvent("pickle_dj:updateInventory", source, Inventory.GetInventory(source))
         end)
     end
 
@@ -254,7 +250,7 @@ CreateThread(function()
         return xPlayer.hasWeapon(name)
     end
 
-    RegisterCallback("pickle_casinos:getInventory", function(source, cb)
+    RegisterCallback("pickle_dj:getInventory", function(source, cb)
         cb(Inventory.GetInventory(source))
     end)
     

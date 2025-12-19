@@ -6,10 +6,6 @@ function ShowNotification(text)
 	ESX.ShowNotification(text)
 end
 
-function ServerCallback(name, cb, ...)
-    ESX.TriggerServerCallback(name, cb,  ...)
-end
-
 function CanAccessGroup(data)
     if not data then return true end
     local pdata = ESX.GetPlayerData()
@@ -33,13 +29,6 @@ function GetPlayersInArea(coords, radius)
     return players
 end
 
-function ResetClothes()
-    ESX.TriggerServerCallback('esx_skin:getPlayerSkin', function(skin, jobSkin)
-        TriggerEvent('skinchanger:loadSkin', skin)
-        TriggerEvent('esx:restoreLoadout')
-    end)
-end
-
 function Revive()
     TriggerEvent("esx_basicneeds:resetStatus")
     TriggerEvent("esx_ambulancejob:revive")
@@ -55,25 +44,8 @@ end)
 
 RegisterNetEvent('esx:playerLoaded')
 AddEventHandler('esx:playerLoaded',function(xPlayer, isNew, skin)
-    TriggerServerEvent("pickle_casinos:initializePlayer")
+    TriggerServerEvent("pickle_dj:initializePlayer")
 end)
-
-function ToggleOutfit(onduty)
-    if onduty then 
-        local outfits = Config.BountyHunters.outfits
-        ESX.TriggerServerCallback('esx_skin:getPlayerSkin', function(skin, jobSkin)
-            local gender = skin.sex
-            local outfit = gender == 1 and outfits.female or outfits.male
-            if not outfit then return end
-            TriggerEvent('skinchanger:loadClothes', skin, outfit)
-        end)
-    else
-        ESX.TriggerServerCallback('esx_skin:getPlayerSkin', function(skin, jobSkin)
-            local gender = skin.sex
-            TriggerEvent('skinchanger:loadSkin', skin)
-        end)
-    end
-end
 
 -- Inventory Fallback
 
@@ -88,12 +60,12 @@ CreateThread(function()
     
     Inventory.Ready = false
     
-    RegisterNetEvent("pickle_casinos:setupInventory", function(data)
+    RegisterNetEvent("pickle_dj:setupInventory", function(data)
         Inventory.Items = data.items
         Inventory.Ready = true
     end)
     
-    RegisterNetEvent("pickle_casinos:updateInventory", function(inventory) 
+    RegisterNetEvent("pickle_dj:updateInventory", function(inventory) 
         -- RefreshInventory(inventory)
     end)
 end)

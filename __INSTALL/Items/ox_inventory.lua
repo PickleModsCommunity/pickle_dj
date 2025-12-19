@@ -1,78 +1,42 @@
-['police_report'] = {
-    label = 'Police Report',
-    weight = 1,
+['dj_deck_advanced'] = {
+    label = 'Advanced DJ Deck',
+    weight = 5000,
     stack = true,
-    description = "A report of a police incident."
+    description = "A professional DJ deck for creating and managing DJ stations."
 },
-['evidence_report'] = {
-    label = 'Evidence Report',
-    weight = 1,
+['dj_speaker_large'] = {
+    label = 'Large Speaker',
+    weight = 15000,
     stack = true,
-    description = "This is a report containing evidence for a police incident."
+    description = "A large speaker with 100m sound radius for DJ stations."
 },
-['police_bodycam'] = {
-    label = 'Police Bodycam',
-    weight = 1,
+['dj_speaker_medium'] = {
+    label = 'Medium Speaker',
+    weight = 10000,
     stack = true,
-    description = "A bodycam for police officers."
+    description = "A medium speaker with 50m sound radius for DJ stations."
 },
-['police_shield'] = {
-    label = 'Police Shield',
-    weight = 1,
+['dj_speaker_small'] = {
+    label = 'Small Speaker',
+    weight = 5000,
     stack = true,
-    description = "A shield for police officers."
+    description = "A small speaker with 15m sound radius for DJ stations."
 },
-['police_snakecam'] = {
-    label = 'Police Snakecam',
-    weight = 1,
+['dj_light_ambient'] = {
+    label = 'Ambient Light',
+    weight = 2000,
     stack = true,
-    description = "A snakecam for police officers."
+    description = "An ambient light for DJ station lighting effects."
 },
-['evidence_camera'] = {
-    label = 'Evidence Camera',
-    weight = 1,
+['dj_light_spotlight'] = {
+    label = 'Spotlight',
+    weight = 3000,
     stack = true,
-    description = "A camera for police officers to use for evidence."
+    description = "A spotlight for DJ station lighting effects."
 },
-['breathalyzer'] = {
-    label = 'Breathalyzer',
-    weight = 1,
+['dj_light_barlight'] = {
+    label = 'Bar Light',
+    weight = 2500,
     stack = true,
-    description = "A breathalyzer for police officers to use for evidence."
-},
-['fingerprint_scanner'] = {
-    label = 'Fingerprint Scanner',
-    weight = 1,
-    stack = true,
-    description = "A fingerprint scanner for police officers to use for evidence."
-},
-['grappler'] = {
-    label = 'Grappler',
-    weight = 1,
-    stack = true,
-    description = "A grappler for police officers to use for evidence."
-},
-['handcuffs'] = {
-    label = 'Handcuffs',
-    weight = 1,
-    stack = true,
-    description = "A pair of handcuffs for police officers to use for evidence."
-},
-['stab_sticks'] = {
-    label = 'Stab Sticks',
-    weight = 1,
-    stack = true,
-    description = "A pair of stab sticks for police officers to use for evidence."
-},
-['gsr'] = {
-    label = 'GSR Scanner',
-    weight = 1,
-    stack = true,
-    description = "A gunshot-residue scanner for police officers to use for evidence."
-},
-['blood_test'] = {
-    label = 'Blood Test',
-    weight = 1,
-    stack = true,
-    description = "A blood test for police officers to use for evidence."
+    description = "A bar light for DJ station lighting effects."
 },

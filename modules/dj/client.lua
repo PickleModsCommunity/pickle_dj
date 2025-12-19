@@ -55,7 +55,23 @@ function UnregisterDJStation(id)
         end
     end
     LocalDJStations[id] = nil
+    -- Don't clear DJStations[id] here - it's needed for re-registration
 end
+
+-- Handle station removal from server
+RegisterNetEvent('pickle_dj:removeStation', function(stationId)
+    UnregisterDJStation(stationId)
+    -- Clear station data after unregistering
+    DJStations[stationId] = nil
+    
+    -- If viewing entities for this station, stop viewing
+    if viewingStationId == stationId then
+        viewingEntities = false
+        viewingStationId = nil
+    end
+    
+    ShowNotification("DJ station removed", "info")
+end)
 
 -- Render all props for a DJ station (main prop, speakers, lights)
 local function RenderDJStationProps(id)
@@ -136,7 +152,6 @@ local function RenderDJStationProps(id)
                 lightData.entity = ent
                 lightData.attEnt = attEnt
                 lightData.heading = light.heading + rot.z
-
                 SetObjectLightColor(ent, 1, lightData.color[1], lightData.color[2], lightData.color[3])
                 SetObjectLightColor(attEnt, 1, 0, 0, 0)
             end
@@ -268,11 +283,11 @@ function RegisterDJStation(id)
                                     Wait(100) -- Give props time to spawn
                                 end
                                 local coords = GetEntityCoords(LocalDJStations[id].entity) + vector3(0.0, 0.0, 2.0)
-                                coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * -1.0
+                                coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * 1.0
                                 SetNuiFocus(true, true)
                                 CreateDJCamera()
                                 SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z,
-                                    -30.0, 0.0, station.heading + 0.0, 90.0, 
+                                    -30.0, 0.0, station.heading + 180.0, 90.0, 
                                     2000, 0, 0, 2
                                 )
                                 PlayAnim(PlayerPedId(), "anim@amb@nightclub@djs@dixon@", "dixn_idle_cntr_b_dix", 1.0, -1.0, -1, 1, 1.0, false, false, false)
@@ -463,6 +478,22 @@ function RegisterDJStation(id)
                             OpenWhitelistMenu(id)
                         end
                     })
+                    table.insert(options, {
+                        title = 'Remove Station',
+                        description = 'Permanently delete this DJ station and all its entities',
+                        icon = 'trash',
+                        onSelect = function()
+                            -- Show confirmation dialog
+                            local input = lib.inputDialog('Remove DJ Station', {
+                                {type = 'input', label = 'Type "DELETE" to confirm', description = 'This action cannot be undone. All entities will be removed and items refunded.', required = true, min = 1}
+                            })
+                            if input and input[1] and string.upper(input[1]) == "DELETE" then
+                                TriggerServerEvent('pickle_dj:removeStation', id)
+                            else
+                                ShowNotification("Station removal cancelled", "info")
+                            end
+                        end
+                    })
                 end
                 if #options == 1 then
                     options[1].onSelect()
@@ -537,6 +568,7 @@ function RegisterDJStation(id)
             local lightData = {
                 entity = existingLight and existingLight.entity or nil, -- Preserve existing entity
                 lightType = light.data.lightType,
+                coords = light.coords,
                 heading = light.heading,
                 dbId = light.id,
                 color = lightColor,
@@ -884,6 +916,52 @@ CreateThread(function()
         else
             Wait(1500) -- Check less frequently when no stations nearby
         end
+    end
+end)
+
+-- Refresh light entity props every 5 seconds when within render distance
+CreateThread(function()
+    while true do        
+        local playerCoords = GetEntityCoords(PlayerPedId())
+        local renderDistance = Config.RenderDistance or 100.0
+        
+        -- Check each station
+        for stationId, localStation in pairs(LocalDJStations) do
+            local stationData = DJStations[stationId]
+            if not stationData or not stationData.coords then goto continue_station end
+            
+            -- Check if within render distance
+            local distance = #(playerCoords - stationData.coords)
+            if distance > renderDistance then goto continue_station end
+            
+            -- Refresh light entity props if they exist
+            if localStation.entityData and localStation.entityData.lights then
+                for _, lightData in ipairs(localStation.entityData.lights) do
+                    if lightData.entity and DoesEntityExist(lightData.entity) then
+                        local model = GetEntityModel(lightData.entity)
+                        local rotation = GetEntityRotation(lightData.entity)
+                        local coords = lightData.coords
+                        DeleteScriptObject(lightData.entity)
+                        lightData.entity = CreateProp(model, coords.x, coords.y, coords.z, false, true, false)
+                        SetEntityCoordsNoOffset(lightData.entity, coords.x, coords.y, coords.z, 0.0, 0.0, 0.0)
+                        SetEntityRotation(lightData.entity, rotation.x, rotation.y, rotation.z, 2, true)
+                        -- Refresh light color
+                        if lightData.color then
+                            SetObjectLightColor(lightData.entity, 1, lightData.color[1], lightData.color[2], lightData.color[3])
+                        end
+                        if lightData.attEnt and DoesEntityExist(lightData.attEnt) then
+                            AttachEntityToEntity(lightData.attEnt, lightData.entity, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, false, false, false, 2, true)
+                        end
+                        -- Refresh entity properties (collision and freeze state)
+                        SetEntityCollision(lightData.entity, false, false)
+                        FreezeEntityPosition(lightData.entity, true)
+                    end
+                end
+            end
+            
+            ::continue_station::
+        end
+        Wait(5000) -- Wait 5 seconds between refreshes
     end
 end)
 
@@ -1534,6 +1612,7 @@ RegisterCommand('createdj', function()
             model = input[2],
             coords = GetEntityCoords(PlayerPedId()),
             rotation = GetEntityRotation(PlayerPedId()),
+            rotationOffset = 180.0,
             enableCancel = true
         })
         ShowNotification("Look where you want to place the DJ station. Press E to place, Q to cancel, A/D to rotate", "info")
@@ -1558,6 +1637,93 @@ RegisterCommand('createdj', function()
         end
     end)
 end, false)
+
+-- Handle station item usage
+RegisterNetEvent('pickle_dj:useStationItem', function(prop, stationName)
+    if isPlacingDJ then
+        ShowNotification("You are already placing a DJ station. Press Q to cancel.", "error")
+        return
+    end
+    
+    isPlacingDJ = true
+    local result = StartGizmoEditor({
+        model = prop,
+        coords = GetEntityCoords(PlayerPedId()),
+        rotation = GetEntityRotation(PlayerPedId()),
+        rotationOffset = 180.0,
+        enableCancel = true
+    })
+    ShowNotification("Look where you want to place the DJ station. Press E to place, Q to cancel, A/D to rotate", "info")
+    
+    if result and result.position then
+        -- Prompt for station name
+        local input = lib.inputDialog('Create DJ Station', {
+            {type = 'input', label = 'Station Name', description = 'Enter a name for this DJ station', required = true, min = 1, max = 50, default = stationName}
+        })
+        
+        if input and input[1] then
+            local stationName = input[1]
+            isPlacingDJ = false
+            
+            -- Send to server (mark as fromItem to skip admin check)
+            -- Item will be removed server-side after successful creation
+            TriggerServerEvent('pickle_dj:saveStation', {
+                name = stationName,
+                coords = result.position,
+                heading = result.rotation.z,
+                prop = prop,
+                speakers = {},
+                lights = {},
+                fromItem = true -- Flag to indicate this is from item usage
+            })
+        else
+            isPlacingDJ = false
+            ShowNotification("DJ station creation cancelled", "error")
+        end
+    else
+        isPlacingDJ = false
+        ShowNotification("DJ station creation cancelled", "error")
+    end
+end)
+
+-- Handle entity item usage
+RegisterNetEvent('pickle_dj:useEntityItem', function(entityType, variantKey)
+    -- Check if player is near a manageable station
+    lib.callback('pickle_dj:canUseEntityItem', false, function(canUse, stationId)
+        if not canUse or not stationId then
+            ShowNotification("You must be near a DJ station you can manage to place this item", "error")
+            return
+        end
+        
+        -- Find item name from variant
+        local itemName = nil
+        if entityType == "speaker" then
+            if variantKey == "speaker_1" then
+                itemName = "dj_speaker_large"
+            elseif variantKey == "speaker_2" then
+                itemName = "dj_speaker_medium"
+            elseif variantKey == "speaker_3" then
+                itemName = "dj_speaker_small"
+            end
+        elseif entityType == "light" then
+            if variantKey == "ambient" then
+                itemName = "dj_light_ambient"
+            elseif variantKey == "spotlight" then
+                itemName = "dj_light_spotlight"
+            elseif variantKey == "barlight" then
+                itemName = "dj_light_barlight"
+            end
+        end
+        
+        if not itemName then
+            ShowNotification("Invalid item configuration", "error")
+            return
+        end
+        
+        -- Start entity placement with item name
+        StartEntityPlacement(stationId, entityType, variantKey, itemName)
+    end)
+end)
 
 RegisterCommand('managedj', function()
     local closest = { dist = 999999, id = nil }
@@ -1759,10 +1925,15 @@ function OpenEntityVariantMenu(stationId, entityType)
 end
 
 -- Start entity placement
-function StartEntityPlacement(stationId, entityType, variantKey)
+function StartEntityPlacement(stationId, entityType, variantKey, itemName)
     if isPlacingEntity then
         ShowNotification("You are already placing an entity", "error")
         return
+    end
+    
+    -- Store item name if placing from item
+    if itemName then
+        isPlacingEntityFromItem = itemName
     end
     
     local entityInfo = EntityTypes[entityType]
@@ -1808,6 +1979,8 @@ function StartEntityPlacement(stationId, entityType, variantKey)
         end
     end
     
+    isPlacingEntity = true
+    
     -- Start gizmo editor
     local result = StartGizmoEditor({
         model = model,
@@ -1848,10 +2021,22 @@ function StartEntityPlacement(stationId, entityType, variantKey)
         -- Send to server
         TriggerServerEvent('pickle_dj:addEntity', stationId, entityType, entityData)
         ShowNotification(variantLabel .. " placed successfully!", "success")
+        
+        -- If placed via item, remove item from inventory
+        local wasFromItem = isPlacingEntityFromItem ~= nil
+        if wasFromItem then
+            TriggerServerEvent('pickle_dj:confirmEntityPlacement', isPlacingEntityFromItem)
+            isPlacingEntityFromItem = nil
+        end
+        isPlacingEntity = false
+        if not wasFromItem then
+            OpenEntityTypeMenu(stationId)
+        end
     else
         ShowNotification("Entity placement cancelled", "error")
+        isPlacingEntityFromItem = nil
+        isPlacingEntity = false
     end
-    OpenEntityTypeMenu(stationId)
 end
 
 -- Toggle entity viewing
@@ -1890,6 +2075,7 @@ function StartStationMove(stationId)
         model = station.prop,
         coords = currentCoords,
         rotation = currentRotation,
+        rotationOffset = station.rotationOffset or 180.0,
         enableCancel = true
     })
     
@@ -1929,7 +2115,7 @@ function OpenEntityRemoveMenu(stationId)
                 else
                     ShowNotification("Entity ID not found", "error")
                 end
-                SetTimeout(100, function()
+                SetTimeout(500, function()
                     OpenEntityRemoveMenu(stationId)
                 end)
             end
