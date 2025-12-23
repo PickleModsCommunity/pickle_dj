@@ -1,11 +1,8 @@
 fx_version "cerulean"
 game "gta5"
 author "Pickle Mods"
-description "The best police job in FiveM."
-version "v1.2.1"
-
-data_file 'DLC_ITYP_REQUEST' 'npds_picklestirepunct.ytyp'
-data_file 'DLC_ITYP_REQUEST' 'grappler_props.ytyp'
+description "The best DJ System in FiveM."
+version "v1.1.0"
 
 ui_page "nui/index.html"
 
@@ -40,12 +37,6 @@ server_scripts {
 	"modules/**/server.lua",
     "core/server.lua",
 	"config_sv.lua",
-}
-
-
-provides {
-	"qb-policejob",
-	"esx_policejob",
 }
 
 lua54 'yes'
