@@ -61,7 +61,7 @@ end
 function CanInteractWithStation(source, stationId)
     local station = DJStations[stationId]
     if not station then
-        return false, false, "Station not found"
+        return false, false, _L("dj_station_not_found")
     end
     
     -- Admins can always access
@@ -89,7 +89,7 @@ function CanInteractWithStation(source, stationId)
             end
         end
     end
-    return false, false, "You are not whitelisted for this station"
+    return false, false, _L("dj_not_whitelisted")
 end
 
 -- Create database tables on resource start
@@ -376,14 +376,14 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
     -- Items allow anyone to place stations, /createdj command requires admin
     if not stationData.fromItem then
         if not IsPlayerAdmin(source) then
-            TriggerClientEvent('pickle_dj:notify', source, "You don't have permission to create DJ stations", "error")
+            TriggerClientEvent('pickle_dj:notify', source, _L("dj_no_permission_create"), "error")
             return
         end
     end
     
     local identifier = GetIdentifier(source)
     if not identifier then
-        TriggerClientEvent('pickle_dj:notify', source, "Failed to get player identifier", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_get_identifier"), "error")
         return
     end
     
@@ -403,7 +403,7 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
         },
         function(stationInsertId)
             if not stationInsertId then
-                TriggerClientEvent('pickle_dj:notify', source, "Failed to save DJ station to database", "error")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_save_station"), "error")
                 return
             end
             
@@ -501,7 +501,7 @@ RegisterServerEvent('pickle_dj:saveStation', function(stationData)
                         end
                     end
                     
-                    TriggerClientEvent('pickle_dj:notify', source, "DJ station created successfully!", "success")
+                    TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_created"), "success")
                     debugPrint(("^2[pickle_dj]^0 DJ station '%s' created by %s (DB ID: %s, Game ID: %s)"):format(stationData.name, identifier, stationInsertId, id))
                 end
             end
@@ -529,14 +529,14 @@ RegisterServerEvent('pickle_dj:addEntity', function(gameId, entityType, entityDa
     -- Check if player can manage this station (owner or admin)
     local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
     if not canManage then
-        TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to manage DJ entities", "error")
+        TriggerClientEvent('pickle_dj:notify', source, errorMessage or _L("dj_no_permission_manage"), "error")
         return
     end
     
     -- Get database station ID
     local dbId = StationDBMapping[gameId]
     if not dbId then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found_db"), "error")
         return
     end
     
@@ -599,11 +599,11 @@ function SaveEntityToStation(source, dbId, gameId, entityType, entityData)
                         lightControls = station.lightControls or getStationLightControls(gameId),
                     }
                     TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
-                    TriggerClientEvent('pickle_dj:notify', source, "Entity added successfully!", "success")
+                    TriggerClientEvent('pickle_dj:notify', source, _L("dj_entity_added"), "success")
                 end)
             end
         else
-            TriggerClientEvent('pickle_dj:notify', source, "Failed to save entity", "error")
+            TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_save_entity"), "error")
         end
     end)
 end
@@ -621,21 +621,21 @@ RegisterServerEvent('pickle_dj:moveStation', function(gameId, newCoords, newHead
     
     local station = DJStations[gameId]
     if not station then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found"), "error")
         return
     end
     
     -- Check if player can manage this station (owner or admin)
     local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
     if not canManage then
-        TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to move this station", "error")
+        TriggerClientEvent('pickle_dj:notify', source, errorMessage or _L("dj_no_permission_move"), "error")
         return
     end
     
     -- Get database station ID
     local dbId = StationDBMapping[gameId]
     if not dbId then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found_db"), "error")
         return
     end
     
@@ -744,7 +744,7 @@ RegisterServerEvent('pickle_dj:moveStation', function(gameId, newCoords, newHead
                     end
                 )
             else
-                TriggerClientEvent('pickle_dj:notify', source, "Failed to update station", "error")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_update_station"), "error")
             end
         end
     )
@@ -759,7 +759,7 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
         ['@id'] = entityId
     }, function(results)
         if not results or #results == 0 then
-            TriggerClientEvent('pickle_dj:notify', source, "Entity not found", "error")
+            TriggerClientEvent('pickle_dj:notify', source, _L("dj_entity_not_found"), "error")
             return
         end
         
@@ -784,7 +784,7 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
         -- Check if player can manage this station (owner or admin)
         local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
         if not canManage then
-            TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to manage DJ entities", "error")
+            TriggerClientEvent('pickle_dj:notify', source, errorMessage or _L("dj_no_permission_manage"), "error")
             return
         end
         
@@ -817,7 +817,7 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
                 
                 if itemToReturn and Inventory and Inventory.AddItem then
                     Inventory.AddItem(source, itemToReturn, 1)
-                    TriggerClientEvent('pickle_dj:notify', source, "Item returned to inventory: " .. itemToReturn, "success")
+                    TriggerClientEvent('pickle_dj:notify', source, _L("dj_item_returned", itemToReturn), "success")
                 end
                 
                 if gameId then
@@ -881,14 +881,14 @@ RegisterServerEvent('pickle_dj:removeEntity', function(entityId)
                                 lightControls = station.lightControls or getStationLightControls(gameId),
                             }
                             TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
-                            TriggerClientEvent('pickle_dj:notify', source, "Entity removed successfully!", "success")
+                            TriggerClientEvent('pickle_dj:notify', source, _L("dj_entity_removed"), "success")
                         end
                     end)
                 else
-                    TriggerClientEvent('pickle_dj:notify', source, "Entity removed, but could not update station", "warning")
+                    TriggerClientEvent('pickle_dj:notify', source, _L("dj_entity_removed_no_update"), "warning")
                 end
             else
-                TriggerClientEvent('pickle_dj:notify', source, "Failed to remove entity", "error")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_remove_entity"), "error")
             end
         end)
     end)
@@ -900,7 +900,7 @@ RegisterNetEvent('pickle_dj:updateEntityColorSpec', function(entityId, colorSpec
     
     -- Validate colorSpec
     if colorSpec ~= "primary" and colorSpec ~= "secondary" then
-        TriggerClientEvent('pickle_dj:notify', source, "Invalid color specification", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_invalid_color_spec"), "error")
         return
     end
     
@@ -909,7 +909,7 @@ RegisterNetEvent('pickle_dj:updateEntityColorSpec', function(entityId, colorSpec
         ['@id'] = entityId
     }, function(results)
         if not results or #results == 0 then
-            TriggerClientEvent('pickle_dj:notify', source, "Entity not found", "error")
+            TriggerClientEvent('pickle_dj:notify', source, _L("dj_entity_not_found"), "error")
             return
         end
         
@@ -933,7 +933,7 @@ RegisterNetEvent('pickle_dj:updateEntityColorSpec', function(entityId, colorSpec
         -- Check if player can manage this station (owner or admin)
         local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
         if not canManage then
-            TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to manage DJ entities", "error")
+            TriggerClientEvent('pickle_dj:notify', source, errorMessage or _L("dj_no_permission_manage"), "error")
             return
         end
         
@@ -1009,14 +1009,14 @@ RegisterNetEvent('pickle_dj:updateEntityColorSpec', function(entityId, colorSpec
                                 lightControls = station.lightControls or getStationLightControls(gameId),
                             }
                             TriggerClientEvent('pickle_dj:registerDJStation', -1, gameId, stationData)
-                            TriggerClientEvent('pickle_dj:notify', source, "Light color updated successfully!", "success")
+                            TriggerClientEvent('pickle_dj:notify', source, _L("dj_light_color_updated"), "success")
                         end
                     end)
                 else
                     TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
                 end
             else
-                TriggerClientEvent('pickle_dj:notify', source, "Failed to update entity", "error")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_update_entity"), "error")
             end
         end)
     end)
@@ -1194,7 +1194,7 @@ end)
 lib.callback.register('pickle_dj:canAccessController', function(source, stationId)
     local station = DJStations[stationId]
     if not station or not station.streamId then
-        return false, "Station not found"
+        return false, _L("dj_station_not_found")
     end
     
     -- Check whitelist first (if whitelist exists, must be on it)
@@ -1208,7 +1208,7 @@ lib.callback.register('pickle_dj:canAccessController', function(source, stationI
     local MusicInstances = exports['pickle_dj']:GetMusicInstances() or {}
     local inst = MusicInstances[musicInstanceId]
     if not inst then
-        return false, "Music instance not found"
+        return false, _L("dj_music_instance_not_found")
     end
     
     -- If player is already broadcasting on this exact table, allow access
@@ -1251,7 +1251,7 @@ lib.callback.register('pickle_dj:canAccessController', function(source, stationI
                 
                 if inRange then
                     -- Broadcaster is still in range, deny the request
-                    return false, "Another player is already controlling this DJ station"
+                    return false, _L("dj_another_player_controlling")
                 else
                     -- Broadcaster is out of range, allow takeover
                     return true
@@ -1513,13 +1513,13 @@ RegisterServerEvent('pickle_dj:addWhitelist', function(gameId, whitelistType, va
     
     local station = DJStations[gameId]
     if not station then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found"), "error")
         return
     end
     
     local dbId = StationDBMapping[gameId]
     if not dbId then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found_db"), "error")
         return
     end
     
@@ -1535,7 +1535,7 @@ RegisterServerEvent('pickle_dj:addWhitelist', function(gameId, whitelistType, va
     
     -- Non-admin owners can only add players
     if not isAdmin and isOwner and whitelistType ~= 'player' then
-        TriggerClientEvent('pickle_dj:notify', source, "You can only add players to the whitelist", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_whitelist_only_players"), "error")
         return
     end
     
@@ -1553,9 +1553,9 @@ RegisterServerEvent('pickle_dj:addWhitelist', function(gameId, whitelistType, va
             if insertId then
                 -- Reload whitelist cache
                 ReloadStationWhitelist(dbId)
-                TriggerClientEvent('pickle_dj:notify', source, "Added to whitelist", "success")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_whitelist_added"), "success")
             else
-                TriggerClientEvent('pickle_dj:notify', source, "Failed to add to whitelist", "error")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_add_whitelist"), "error")
             end
         end
     )
@@ -1567,13 +1567,13 @@ RegisterServerEvent('pickle_dj:removeWhitelist', function(gameId, whitelistId)
     
     local station = DJStations[gameId]
     if not station then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found"), "error")
         return
     end
     
     local dbId = StationDBMapping[gameId]
     if not dbId then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found in database", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found_db"), "error")
         return
     end
     
@@ -1596,13 +1596,13 @@ RegisterServerEvent('pickle_dj:removeWhitelist', function(gameId, whitelistId)
         },
         function(results)
             if not results or #results == 0 then
-                TriggerClientEvent('pickle_dj:notify', source, "Whitelist entry not found", "error")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_whitelist_entry_not_found"), "error")
                 return
             end
             
             -- Non-admin owners can only remove players
             if not isAdmin and isOwner and results[1].type ~= 'player' then
-                TriggerClientEvent('pickle_dj:notify', source, "You can only remove players from the whitelist", "error")
+                TriggerClientEvent('pickle_dj:notify', source, _L("dj_whitelist_only_remove_players"), "error")
                 return
             end
             
@@ -1616,9 +1616,9 @@ RegisterServerEvent('pickle_dj:removeWhitelist', function(gameId, whitelistId)
                     if affectedRows > 0 then
                         -- Reload whitelist cache
                         ReloadStationWhitelist(dbId)
-                        TriggerClientEvent('pickle_dj:notify', source, "Removed from whitelist", "success")
+                        TriggerClientEvent('pickle_dj:notify', source, _L("dj_whitelist_removed"), "success")
                     else
-                        TriggerClientEvent('pickle_dj:notify', source, "Failed to remove from whitelist", "error")
+                        TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_remove_whitelist"), "error")
                     end
                 end
             )
@@ -1737,7 +1737,7 @@ end
 RegisterUsableItem('dj_deck_advanced', function(source, item)
     local itemType, configKey, configData = FindItemInConfig('dj_deck_advanced')
     if itemType ~= "station" then
-        TriggerClientEvent('pickle_dj:notify', source, "Invalid item configuration", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_invalid_item_config"), "error")
         return
     end
     
@@ -1815,21 +1815,21 @@ RegisterServerEvent('pickle_dj:removeStation', function(gameId)
     
     local station = DJStations[gameId]
     if not station then
-        TriggerClientEvent('pickle_dj:notify', source, "Station not found", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_not_found"), "error")
         return
     end
     
     -- Check if player can manage this station (owner or admin)
     local canAccess, canManage, errorMessage = CanInteractWithStation(source, gameId)
     if not canManage then
-        TriggerClientEvent('pickle_dj:notify', source, errorMessage or "You don't have permission to remove this station", "error")
+        TriggerClientEvent('pickle_dj:notify', source, errorMessage or _L("dj_no_permission_remove_station"), "error")
         return
     end
     
     -- Get database ID
     local dbId = StationDBMapping[gameId]
     if not dbId then
-        TriggerClientEvent('pickle_dj:notify', source, "Station database ID not found", "error")
+        TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_db_id_not_found"), "error")
         return
     end
     
@@ -1923,8 +1923,22 @@ RegisterServerEvent('pickle_dj:removeStation', function(gameId)
                             StationParticleEffects[gameId] = nil
                             StationWhitelists[dbId] = nil
                             
-                            -- Delete music instance if it exists
+                            -- Stop broadcast if there's a broadcaster on this station's music instance
                             if station.streamId then
+                                local MusicInstances = exports['pickle_dj']:GetMusicInstances() or {}
+                                local inst = MusicInstances[station.streamId]
+                                if inst and inst.broadcaster then
+                                    local broadcasterSrc = inst.broadcaster
+                                    debugPrint(("^2[pickle_dj]^0 Stopping broadcast for broadcaster %s (station %s removed)"):format(broadcasterSrc, gameId))
+                                    -- Stop the broadcast for the broadcaster
+                                    TriggerClientEvent('pickle_dj:stopBroadcasting', broadcasterSrc)
+                                    -- Clear the broadcaster from the instance
+                                    inst.broadcaster = nil
+                                    inst.streamId = nil
+                                    TriggerClientEvent("music:musicInstanceUpdated", -1, station.streamId, inst)
+                                    TriggerClientEvent('music:rtc:broadcastStopped', -1, json.encode({}))
+                                end
+                                -- Delete music instance
                                 TriggerEvent('pickle_dj:deleteMusicInstance', station.streamId)
                             end
                             
@@ -1935,9 +1949,9 @@ RegisterServerEvent('pickle_dj:removeStation', function(gameId)
                                 end
                                 
                                 if #itemsToRefund > 0 then
-                                    TriggerClientEvent('pickle_dj:notify', source, "DJ station removed. " .. #itemsToRefund .. " item(s) returned to inventory", "success")
+                                    TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_removed_items", #itemsToRefund), "success")
                                 else
-                                    TriggerClientEvent('pickle_dj:notify', source, "DJ station removed successfully", "success")
+                                    TriggerClientEvent('pickle_dj:notify', source, _L("dj_station_removed"), "success")
                                 end
                             else
                                 TriggerClientEvent('pickle_dj:notify', source, "DJ station removed successfully", "success")
@@ -1948,7 +1962,7 @@ RegisterServerEvent('pickle_dj:removeStation', function(gameId)
                             
                             debugPrint(("^2[pickle_dj]^0 Station %s removed by %s (refunded %d items)"):format(gameId, GetIdentifier(source) or "unknown", #itemsToRefund))
                         else
-                            TriggerClientEvent('pickle_dj:notify', source, "Failed to remove station from database", "error")
+                            TriggerClientEvent('pickle_dj:notify', source, _L("dj_failed_remove_station"), "error")
                         end
                     end)
                 end)

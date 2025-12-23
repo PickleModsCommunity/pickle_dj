@@ -70,7 +70,7 @@ RegisterNetEvent('pickle_dj:removeStation', function(stationId)
         viewingStationId = nil
     end
     
-    ShowNotification("DJ station removed", "info")
+    ShowNotification(_L("dj_station_removed_info"), "info")
 end)
 
 -- Render all props for a DJ station (main prop, speakers, lights)
@@ -250,14 +250,14 @@ function RegisterDJStation(id)
                     if errorMessage then
                         ShowNotification(errorMessage, "error")
                     else
-                        ShowNotification("You don't have access to this DJ station", "error")
+                        ShowNotification(_L("dj_no_access_station"), "error")
                     end
                     return
                 end
                 local options =  {
                     { 
-                        title = 'Open DJ Controller', 
-                        description = 'Open the DJ controller for this station.',
+                        title = _L("dj_open_controller_title"), 
+                        description = _L("dj_open_controller_description"),
                         icon = 'music',
                         onSelect = function()
                             -- Check if player can access the controller before opening UI
@@ -269,7 +269,7 @@ function RegisterDJStation(id)
                                     if errorMessage then
                                         ShowNotification(errorMessage, "error")
                                     else
-                                        ShowNotification("You cannot access this DJ controller", "error")
+                                        ShowNotification(_L("dj_cannot_access_controller"), "error")
                                     end
                                     return
                                 end
@@ -463,34 +463,34 @@ function RegisterDJStation(id)
                 }
                 if canManage then
                     table.insert(options, { 
-                        title = 'Manage DJ Objects', 
-                        description = 'Place speakers, lights, and other objects for this station.',
+                        title = _L("dj_manage_objects_title"), 
+                        description = _L("dj_manage_objects_description"),
                         icon = 'cog',
                         onSelect = function()
                             OpenEntityManagementMenu(id)
                         end
                     })
                     table.insert(options, {
-                        title = 'Manage Whitelist',
-                        description = 'Manage who can access this DJ station',
+                        title = _L("dj_manage_whitelist_title"),
+                        description = _L("dj_manage_whitelist_description"),
                         icon = 'user-check',
                         onSelect = function()
                             OpenWhitelistMenu(id)
                         end
                     })
                     table.insert(options, {
-                        title = 'Remove Station',
-                        description = 'Permanently delete this DJ station and all its entities',
+                        title = _L("dj_remove_station_title"),
+                        description = _L("dj_remove_station_description"),
                         icon = 'trash',
                         onSelect = function()
                             -- Show confirmation dialog
-                            local input = lib.inputDialog('Remove DJ Station', {
-                                {type = 'input', label = 'Type "DELETE" to confirm', description = 'This action cannot be undone. All entities will be removed and items refunded.', required = true, min = 1}
+                            local input = lib.inputDialog(_L("dj_remove_station_dialog_title"), {
+                                {type = 'input', label = _L("dj_remove_station_confirm_label"), description = _L("dj_remove_station_confirm_description"), required = true, min = 1}
                             })
                             if input and input[1] and string.upper(input[1]) == "DELETE" then
                                 TriggerServerEvent('pickle_dj:removeStation', id)
                             else
-                                ShowNotification("Station removal cancelled", "info")
+                                ShowNotification(_L("dj_station_removal_cancelled"), "info")
                             end
                         end
                     })
@@ -1270,6 +1270,12 @@ RegisterNUICallback('updateParticleEffect', function(data, cb)
     cb(true)
 end)
 
+RegisterNUICallback('getConfig', function(data, cb)
+    cb({
+        locale = Language[Config.Language]
+    })
+end)
+
 -- Receive networked control updates from server
 -- Client only stores what server sends, no mapping or conversion
 RegisterNetEvent('pickle_dj:lightControlsUpdated', function(stationId, lightType, property, value)
@@ -1586,26 +1592,26 @@ end
 -- Command handler
 RegisterCommand('createdj', function()
     if isPlacingDJ then
-        ShowNotification("You are already placing a DJ station. Press Q to cancel.", "error")
+        ShowNotification(_L("dj_already_placing"), "error")
         return
     end
     
     -- Check if player has admin permission (server will also check)
     lib.callback('pickle_dj:checkAdmin', false, function(isAdmin)
         if not isAdmin then
-            ShowNotification("You don't have permission to use this command", "error")
+            ShowNotification(_L("dj_no_permission_command"), "error")
             return
         end
         local options = {}
         for k,v in pairs(Config.DJStations) do
             table.insert(options, {label = k, value = v.prop})
         end
-        local input = lib.inputDialog('Create DJ Station', {
-            {type = 'input', label = 'Station Name', description = 'Enter a name for this DJ station', required = true, min = 1, max = 50},
-            {type = 'select', label = 'Prop', description = 'Select a prop for the DJ station', options = options, required = true, default = options[1].value}
+        local input = lib.inputDialog(_L("dj_create_station_title"), {
+            {type = 'input', label = _L("dj_station_name_label"), description = _L("dj_station_name_description"), required = true, min = 1, max = 50},
+            {type = 'select', label = _L("dj_prop_label"), description = _L("dj_prop_description"), options = options, required = true, default = options[1].value}
         })
         if not input or not input[1] or not input[2] then
-            ShowNotification("No DJ station selected", "error")
+            ShowNotification(_L("dj_no_station_selected"), "error")
             return
         end
         local result = StartGizmoEditor({
@@ -1615,7 +1621,7 @@ RegisterCommand('createdj', function()
             rotationOffset = 180.0,
             enableCancel = true
         })
-        ShowNotification("Look where you want to place the DJ station. Press E to place, Q to cancel, A/D to rotate", "info")
+        ShowNotification(_L("dj_place_station_instructions"), "info")
         
         if result and result.position then
             local stationName = input[1]
@@ -1633,7 +1639,7 @@ RegisterCommand('createdj', function()
             })
         else
             isPlacingDJ = false
-            ShowNotification("DJ station creation cancelled", "error")
+            ShowNotification(_L("dj_station_creation_cancelled"), "error")
         end
     end)
 end, false)
@@ -1641,7 +1647,7 @@ end, false)
 -- Handle station item usage
 RegisterNetEvent('pickle_dj:useStationItem', function(prop, stationName)
     if isPlacingDJ then
-        ShowNotification("You are already placing a DJ station. Press Q to cancel.", "error")
+        ShowNotification(_L("dj_already_placing"), "error")
         return
     end
     
@@ -1657,8 +1663,8 @@ RegisterNetEvent('pickle_dj:useStationItem', function(prop, stationName)
     
     if result and result.position then
         -- Prompt for station name
-        local input = lib.inputDialog('Create DJ Station', {
-            {type = 'input', label = 'Station Name', description = 'Enter a name for this DJ station', required = true, min = 1, max = 50, default = stationName}
+        local input = lib.inputDialog(_L("dj_create_station_title"), {
+            {type = 'input', label = _L("dj_station_name_label"), description = _L("dj_station_name_description"), required = true, min = 1, max = 50, default = stationName}
         })
         
         if input and input[1] then
@@ -1678,7 +1684,7 @@ RegisterNetEvent('pickle_dj:useStationItem', function(prop, stationName)
             })
         else
             isPlacingDJ = false
-            ShowNotification("DJ station creation cancelled", "error")
+            ShowNotification(_L("dj_station_creation_cancelled"), "error")
         end
     else
         isPlacingDJ = false
@@ -1691,7 +1697,7 @@ RegisterNetEvent('pickle_dj:useEntityItem', function(entityType, variantKey)
     -- Check if player is near a manageable station
     lib.callback('pickle_dj:canUseEntityItem', false, function(canUse, stationId)
         if not canUse or not stationId then
-            ShowNotification("You must be near a DJ station you can manage to place this item", "error")
+            ShowNotification(_L("dj_must_be_near_station"), "error")
             return
         end
         
@@ -1716,7 +1722,7 @@ RegisterNetEvent('pickle_dj:useEntityItem', function(entityType, variantKey)
         end
         
         if not itemName then
-            ShowNotification("Invalid item configuration", "error")
+            ShowNotification(_L("dj_invalid_item_config"), "error")
             return
         end
         
@@ -1737,7 +1743,7 @@ RegisterCommand('managedj', function()
     if closest.id then
         OpenEntityManagementMenu(closest.id)
     else
-        ShowNotification("No DJ station found", "error")
+        ShowNotification(_L("dj_no_station_found"), "error")
     end
 end, false)
 
@@ -1749,18 +1755,18 @@ local viewingStationId = nil
 -- Entity type definitions
 local EntityTypes = {
     speaker = {
-        label = "Speaker",
+        label = _L("dj_speaker_label"),
         icon = "volume-high",
         defaultModel = `h4_prop_battle_club_speaker_med`,
         configKey = "speaker_1"
     },
     light = {
-        label = "Light",
+        label = _L("dj_light_label"),
         icon = "lightbulb",
         defaultModel = `stg_blinder`,
     },
     smokemachine = {
-        label = "Smoke Machine",
+        label = _L("dj_smoke_machine_label"),
         icon = "cloud",
         defaultModel = `ba_prop_club_smoke_machine`,
     }
@@ -1788,30 +1794,30 @@ function OpenEntityManagementMenu(stationId)
     -- Check if player can manage this station (owner or admin)
     lib.callback('pickle_dj:canManageStation', false, function(canManage)
         if not canManage then
-            ShowNotification("You don't have permission to manage this DJ station", "error")
+            ShowNotification(_L("dj_no_permission_manage_station"), "error")
             return
         end
         
         local options = {
             {
-                title = "Move DJ Table",
-                description = "Reposition the DJ table (entities will move with it)",
+                title = _L("dj_move_table_title"),
+                description = _L("dj_move_table_description"),
                 icon = "arrows-up-down-left-right",
                 onSelect = function()
                     StartStationMove(stationId)
                 end
             },
             {
-                title = "Place Entity",
-                description = "Place a new speaker, light, or other object",
+                title = _L("dj_place_entity_title"),
+                description = _L("dj_place_entity_description"),
                 icon = "plus",
                 onSelect = function()
                     OpenEntityTypeMenu(stationId)
                 end
             },
             {
-                title = "View Entities",
-                description = "View all entities for this station",
+                title = _L("dj_view_entities_title"),
+                description = _L("dj_view_entities_description"),
                 icon = "eye",
                 onSelect = function()
                     ToggleEntityViewing(stationId)
@@ -1821,16 +1827,16 @@ function OpenEntityManagementMenu(stationId)
                 end
             },
             {
-                title = "Remove Entity",
-                description = "Remove an entity from this station",
+                title = _L("dj_remove_entity_title"),
+                description = _L("dj_remove_entity_description"),
                 icon = "trash",
                 onSelect = function()
                     OpenEntityRemoveMenu(stationId)
                 end
             },
             {
-                title = "Manage Light Colors",
-                description = "Set individual lights to use primary or secondary color",
+                title = _L("dj_manage_light_colors_title"),
+                description = _L("dj_manage_light_colors_description"),
                 icon = "palette",
                 onSelect = function()
                     OpenLightColorMenu(stationId)
@@ -1840,7 +1846,7 @@ function OpenEntityManagementMenu(stationId)
         
         lib.registerContext({
             id = 'dj_entity_manage_' .. stationId,
-            title = station.name .. " - Entity Management",
+            title = _L("dj_entity_management", station.name),
             options = options
         })
         lib.showContext('dj_entity_manage_' .. stationId)
@@ -1854,7 +1860,7 @@ function OpenEntityTypeMenu(stationId)
     for entityType, entityInfo in pairs(EntityTypes) do
         table.insert(options, {
             title = entityInfo.label,
-            description = "Place a " .. entityInfo.label:lower(),
+            description = _L("dj_place_entity_type_description", entityInfo.label:lower()),
             icon = entityInfo.icon,
             onSelect = function()
                 -- Show variant selection for speakers and lights
@@ -1867,12 +1873,12 @@ function OpenEntityTypeMenu(stationId)
         })
     end
     
-    lib.registerContext({
-        id = 'dj_entity_type_' .. stationId,
-        title = "Select Entity Type",
-        menu = 'dj_entity_manage_' .. stationId,
-        options = options
-    })
+        lib.registerContext({
+            id = 'dj_entity_type_' .. stationId,
+            title = _L("dj_select_entity_type"),
+            menu = 'dj_entity_manage_' .. stationId,
+            options = options
+        })
     lib.showContext('dj_entity_type_' .. stationId)
 end
 
@@ -1884,21 +1890,21 @@ function OpenEntityVariantMenu(stationId, entityType)
     
     if entityType == "speaker" then
         configTable = Config.SpeakerProps
-        title = "Select Speaker Type"
+        title = _L("dj_select_speaker_type")
     elseif entityType == "light" then
         configTable = Config.LightTypes
-        title = "Select Light Type"
+        title = _L("dj_select_light_type")
     end
     
     if not configTable then
-        ShowNotification("No variants available for this entity type", "error")
+        ShowNotification(_L("dj_no_variants_available"), "error")
         return
     end
     
     -- Build options from config
     for variantKey, variantData in pairs(configTable) do
         local label = variantData.label or variantKey
-        local description = "Place a " .. label:lower()
+        local description = _L("dj_place_entity_type_description", label:lower())
         
         table.insert(options, {
             title = label,
@@ -1911,7 +1917,7 @@ function OpenEntityVariantMenu(stationId, entityType)
     end
     
     if #options == 0 then
-        ShowNotification("No variants configured for this entity type", "error")
+        ShowNotification(_L("dj_no_variants_configured"), "error")
         return
     end
     
@@ -1927,7 +1933,7 @@ end
 -- Start entity placement
 function StartEntityPlacement(stationId, entityType, variantKey, itemName)
     if isPlacingEntity then
-        ShowNotification("You are already placing an entity", "error")
+        ShowNotification(_L("dj_already_placing_entity"), "error")
         return
     end
     
@@ -2020,7 +2026,7 @@ function StartEntityPlacement(stationId, entityType, variantKey, itemName)
         
         -- Send to server
         TriggerServerEvent('pickle_dj:addEntity', stationId, entityType, entityData)
-        ShowNotification(variantLabel .. " placed successfully!", "success")
+        ShowNotification(_L("dj_entity_placed", variantLabel), "success")
         
         -- If placed via item, remove item from inventory
         local wasFromItem = isPlacingEntityFromItem ~= nil
@@ -2033,7 +2039,7 @@ function StartEntityPlacement(stationId, entityType, variantKey, itemName)
             OpenEntityTypeMenu(stationId)
         end
     else
-        ShowNotification("Entity placement cancelled", "error")
+        ShowNotification(_L("dj_entity_placement_cancelled"), "error")
         isPlacingEntityFromItem = nil
         isPlacingEntity = false
     end
@@ -2044,11 +2050,11 @@ function ToggleEntityViewing(stationId)
     if viewingEntities and viewingStationId == stationId then
         viewingEntities = false
         viewingStationId = nil
-        ShowNotification("Entity viewing disabled", "info")
+        ShowNotification(_L("dj_entity_viewing_disabled"), "info")
     else
         viewingEntities = true
         viewingStationId = stationId
-        ShowNotification("Entity viewing enabled - Look at entities to see their info", "info")
+        ShowNotification(_L("dj_entity_viewing_enabled"), "info")
     end
 end
 
@@ -2056,13 +2062,13 @@ end
 function StartStationMove(stationId)
     local station = DJStations[stationId]
     if not station then
-        ShowNotification("Station not found", "error")
+        ShowNotification(_L("dj_station_not_found"), "error")
         return
     end
     
     local localStation = LocalDJStations[stationId]
     if not localStation or not localStation.entity or not DoesEntityExist(localStation.entity) then
-        ShowNotification("Station entity not found", "error")
+        ShowNotification(_L("dj_station_entity_not_found"), "error")
         return
     end
     
@@ -2079,13 +2085,13 @@ function StartStationMove(stationId)
         enableCancel = true
     })
     
-    ShowNotification("Move the DJ table. Press E to confirm, Q to cancel, A/D to rotate", "info")
+    ShowNotification(_L("dj_move_table_instructions"), "info")
     
     if result and result.position then
         -- Send new position to server
         TriggerServerEvent('pickle_dj:moveStation', stationId, result.position, result.rotation.z)
     else
-        ShowNotification("Station move cancelled", "error")
+        ShowNotification(_L("dj_station_move_cancelled"), "error")
     end
 end
 
@@ -2093,7 +2099,7 @@ end
 function OpenEntityRemoveMenu(stationId)
     local localStation = LocalDJStations[stationId]
     if not localStation or not localStation.entityData then
-        ShowNotification("No entities found", "error")
+        ShowNotification(_L("dj_no_entities_found"), "error")
         return
     end
     
@@ -2107,13 +2113,13 @@ function OpenEntityRemoveMenu(stationId)
         end
         table.insert(options, {
             title = variantLabel .. " #" .. (speakerData.dbId or i),
-            description = "Remove this speaker",
+            description = _L("dj_remove_speaker"),
             icon = "volume-high",
             onSelect = function()
                 if speakerData.dbId then
                     TriggerServerEvent('pickle_dj:removeEntity', speakerData.dbId)
                 else
-                    ShowNotification("Entity ID not found", "error")
+                    ShowNotification(_L("dj_entity_id_not_found"), "error")
                 end
                 SetTimeout(500, function()
                     OpenEntityRemoveMenu(stationId)
@@ -2130,13 +2136,13 @@ function OpenEntityRemoveMenu(stationId)
         end
         table.insert(options, {
             title = variantLabel .. " #" .. (lightData.dbId or i),
-            description = "Remove this light",
+            description = _L("dj_remove_light"),
             icon = "lightbulb",
             onSelect = function()
                 if lightData.dbId then
                     TriggerServerEvent('pickle_dj:removeEntity', lightData.dbId)
                 else
-                    ShowNotification("Entity ID not found", "error")
+                    ShowNotification(_L("dj_entity_id_not_found"), "error")
                 end
                 SetTimeout(500, function()
                     OpenEntityRemoveMenu(stationId)
@@ -2148,14 +2154,14 @@ function OpenEntityRemoveMenu(stationId)
     -- Add smoke machines
     for i, smokeMachineData in ipairs(localStation.entityData.smokemachines or {}) do
         table.insert(options, {
-            title = "Smoke Machine #" .. (smokeMachineData.dbId or i),
-            description = "Remove this smoke machine",
+            title = _L("dj_smoke_machine_number", smokeMachineData.dbId or i),
+            description = _L("dj_remove_smoke_machine"),
             icon = "cloud",
             onSelect = function()
                 if smokeMachineData.dbId then
                     TriggerServerEvent('pickle_dj:removeEntity', smokeMachineData.dbId)
                 else
-                    ShowNotification("Entity ID not found", "error")
+                    ShowNotification(_L("dj_entity_id_not_found"), "error")
                 end
                 SetTimeout(500, function()
                     OpenEntityRemoveMenu(stationId)
@@ -2165,13 +2171,13 @@ function OpenEntityRemoveMenu(stationId)
     end
     
     if #options == 0 then
-        ShowNotification("No entities to remove", "info")
+        ShowNotification(_L("dj_no_entities_to_remove"), "info")
         return
     end
     
     lib.registerContext({
         id = 'dj_entity_remove_' .. stationId,
-        title = "Remove Entity",
+        title = _L("dj_remove_entity_title_menu"),
         menu = 'dj_entity_manage_' .. stationId,
         options = options
     })
@@ -2182,7 +2188,7 @@ end
 function OpenLightColorMenu(stationId)
     local localStation = LocalDJStations[stationId]
     if not localStation or not localStation.entityData then
-        ShowNotification("No entities found", "error")
+        ShowNotification(_L("dj_no_entities_found"), "error")
         return
     end
     
@@ -2208,12 +2214,13 @@ function OpenLightColorMenu(stationId)
             end
         end
         
-        local colorSpecLabel = currentColorSpec == "primary" and "Primary" or "Secondary"
+        local colorSpecLabel = currentColorSpec == "primary" and _L("dj_color_primary") or _L("dj_color_secondary")
         local oppositeColorSpec = currentColorSpec == "primary" and "secondary" or "primary"
+        local oppositeColorSpecLabel = oppositeColorSpec == "primary" and _L("dj_color_primary") or _L("dj_color_secondary")
         
         table.insert(options, {
             title = variantLabel .. " #" .. (lightData.dbId or i),
-            description = "Color: " .. colorSpecLabel .. " (Click to switch to " .. (oppositeColorSpec == "primary" and "Primary" or "Secondary") .. ")",
+            description = _L("dj_color_description", colorSpecLabel, oppositeColorSpecLabel),
             icon = currentColorSpec == "primary" and "circle" or "circle-dot",
             onSelect = function()
                 if lightData.dbId then
@@ -2232,7 +2239,7 @@ function OpenLightColorMenu(stationId)
                         lightData.data = { colorSpec = newColorSpec, data = { colorSpec = newColorSpec } }
                     end
                 else
-                    ShowNotification("Entity ID not found", "error")
+                    ShowNotification(_L("dj_entity_id_not_found"), "error")
                 end
                 -- Refresh menu to show updated state
                 SetTimeout(500, function()
@@ -2243,13 +2250,13 @@ function OpenLightColorMenu(stationId)
     end
     
     if #options == 0 then
-        ShowNotification("No lights found", "info")
+        ShowNotification(_L("dj_no_lights_found"), "info")
         return
     end
     
     lib.registerContext({
         id = 'dj_light_color_' .. stationId,
-        title = "Manage Light Colors",
+        title = _L("dj_manage_light_colors_title_menu"),
         menu = 'dj_entity_manage_' .. stationId,
         options = options
     })
@@ -2272,7 +2279,7 @@ function OpenWhitelistMenu(stationId)
     -- Check if player can manage whitelist
     lib.callback('pickle_dj:canManageStation', false, function(canManage)
         if not canManage then
-            ShowNotification("You don't have permission to manage this DJ station", "error")
+            ShowNotification(_L("dj_no_permission_manage_station"), "error")
             return
         end
         
@@ -2293,7 +2300,7 @@ function OpenWhitelistMenu(stationId)
                     
                     table.insert(options, {
                         title = displayName,
-                        description = "Type: " .. entry.type:gsub("^%l", string.upper),
+                        description = _L("dj_whitelist_type", entry.type:gsub("^%l", string.upper)),
                         icon = entry.type == 'player' and "user" or (entry.type == 'job' and "briefcase" or "shield"),
                         onSelect = function()
                             lib.callback('pickle_dj:checkAdmin', false, function(isAdmin2)
@@ -2306,12 +2313,12 @@ function OpenWhitelistMenu(stationId)
                                 if canRemove then
                                     lib.registerContext({
                                         id = 'dj_whitelist_remove_' .. entry.id,
-                                        title = "Remove from Whitelist",
+                                        title = _L("dj_remove_from_whitelist"),
                                         menu = 'dj_whitelist_' .. stationId,
                                         options = {
                                             {
-                                                title = "Confirm Remove",
-                                                description = "Remove " .. displayName .. " from whitelist",
+                                                title = _L("dj_confirm_remove_title"),
+                                                description = _L("dj_confirm_remove_description", displayName),
                                                 icon = "trash",
                                                 onSelect = function()
                                                     TriggerServerEvent('pickle_dj:removeWhitelist', stationId, entry.id)
@@ -2324,7 +2331,7 @@ function OpenWhitelistMenu(stationId)
                                     })
                                     lib.showContext('dj_whitelist_remove_' .. entry.id)
                                 else
-                                    ShowNotification("You can only remove players from the whitelist", "error")
+                                    ShowNotification(_L("dj_whitelist_only_remove_players"), "error")
                                 end
                             end)
                         end
@@ -2333,8 +2340,8 @@ function OpenWhitelistMenu(stationId)
                 
                 -- Add option to add new entry
                 table.insert(options, {
-                    title = "Add to Whitelist",
-                    description = "Add a player, job, or ACE permission",
+                    title = _L("dj_add_to_whitelist_title"),
+                    description = _L("dj_add_to_whitelist_description"),
                     icon = "plus",
                     onSelect = function()
                         OpenAddWhitelistMenu(stationId, isAdmin)
@@ -2343,7 +2350,7 @@ function OpenWhitelistMenu(stationId)
                 
                 lib.registerContext({
                     id = 'dj_whitelist_' .. stationId,
-                    title = station.name .. " - Whitelist Management",
+                    title = _L("dj_whitelist_management", station.name),
                     menu = 'dj_station_' .. stationId,
                     options = options
                 })
@@ -2357,20 +2364,20 @@ end
 function OpenAddWhitelistMenu(stationId, isAdmin)
     local options = {
         {
-            title = "Add Player",
-            description = "Select a nearby player to add",
+            title = _L("dj_add_player_title"),
+            description = _L("dj_add_player_description"),
             icon = "user",
             onSelect = function()
                 local station = DJStations[stationId]
                 if not station or not station.coords then
-                    ShowNotification("Station not found", "error")
+                    ShowNotification(_L("dj_station_not_found"), "error")
                     return
                 end
                 
                 -- Get nearby players
                 lib.callback('pickle_dj:getNearbyPlayers', false, function(nearbyPlayers)
                     if not nearbyPlayers or #nearbyPlayers == 0 then
-                        ShowNotification("No nearby players found", "info")
+                        ShowNotification(_L("dj_no_nearby_players"), "info")
                         return
                     end
                     
@@ -2378,11 +2385,11 @@ function OpenAddWhitelistMenu(stationId, isAdmin)
                     for _, player in ipairs(nearbyPlayers) do
                         table.insert(options, {
                             title = player.name,
-                            description = "ID: " .. player.serverId .. " | Distance: " .. player.distance .. "m",
+                            description = _L("dj_player_info", player.serverId, player.distance),
                             icon = "user",
                             onSelect = function()
                                 TriggerServerEvent('pickle_dj:addWhitelist', stationId, 'player', player.identifier, player.name, 0)
-                                ShowNotification("Added " .. player.name .. " to whitelist", "success")
+                                ShowNotification(_L("dj_added_to_whitelist", player.name), "success")
                                 SetTimeout(500, function()
                                     OpenWhitelistMenu(stationId)
                                 end)
@@ -2392,7 +2399,7 @@ function OpenAddWhitelistMenu(stationId, isAdmin)
                     
                     lib.registerContext({
                         id = 'dj_select_player_' .. stationId,
-                        title = "Select Player to Add",
+                        title = _L("dj_select_player_to_add"),
                         menu = 'dj_add_whitelist_' .. stationId,
                         options = options
                     })
@@ -2404,13 +2411,13 @@ function OpenAddWhitelistMenu(stationId, isAdmin)
     
     if isAdmin then
         table.insert(options, {
-            title = "Add Job",
-            description = "Add a job with minimum rank",
+            title = _L("dj_add_job_title"),
+            description = _L("dj_add_job_description"),
             icon = "briefcase",
             onSelect = function()
-                local input = lib.inputDialog('Add Job to Whitelist', {
-                    {type = 'input', label = 'Job Name', description = 'Enter the job name (e.g., police)', required = true},
-                    {type = 'number', label = 'Minimum Rank', description = 'Minimum rank level (0 = all ranks)', required = true, default = 0, min = 0}
+                local input = lib.inputDialog(_L("dj_add_job_title"), {
+                    {type = 'input', label = _L("dj_job_name_label"), description = _L("dj_job_name_description"), required = true},
+                    {type = 'number', label = _L("dj_minimum_rank_label"), description = _L("dj_minimum_rank_description"), required = true, default = 0, min = 0}
                 })
                 if input and input[1] and input[2] ~= nil then
                     TriggerServerEvent('pickle_dj:addWhitelist', stationId, 'job', input[1], input[1], input[2])
@@ -2422,12 +2429,12 @@ function OpenAddWhitelistMenu(stationId, isAdmin)
         })
         
         table.insert(options, {
-            title = "Add ACE Permission",
-            description = "Add an ACE permission",
+            title = _L("dj_add_ace_title"),
+            description = _L("dj_add_ace_description"),
             icon = "shield",
             onSelect = function()
-                local input = lib.inputDialog('Add ACE Permission to Whitelist', {
-                    {type = 'input', label = 'ACE Permission', description = 'Enter the ACE permission (e.g., command.dj)', required = true}
+                local input = lib.inputDialog(_L("dj_add_ace_title"), {
+                    {type = 'input', label = _L("dj_ace_permission_label"), description = _L("dj_ace_permission_description"), required = true}
                 })
                 if input and input[1] then
                     TriggerServerEvent('pickle_dj:addWhitelist', stationId, 'ace', input[1], input[1], 0)
@@ -2441,7 +2448,7 @@ function OpenAddWhitelistMenu(stationId, isAdmin)
     
     lib.registerContext({
         id = 'dj_add_whitelist_' .. stationId,
-        title = "Add to Whitelist",
+        title = _L("dj_add_to_whitelist_title"),
         menu = 'dj_whitelist_' .. stationId,
         options = options
     })

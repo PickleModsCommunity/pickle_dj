@@ -23,7 +23,7 @@ end
 
 function GetPlayerCharacterName(source)
     local xPlayer = ESX.GetPlayerFromId(source)
-    if not xPlayer then return "Unknown Name" end
+    if not xPlayer then return _L("unknown_name") end
     return xPlayer.getName()
 end
 
@@ -249,10 +249,6 @@ CreateThread(function()
         local xPlayer = ESX.GetPlayerFromId(source)
         return xPlayer.hasWeapon(name)
     end
-
-    RegisterCallback("pickle_dj:getInventory", function(source, cb)
-        cb(Inventory.GetInventory(source))
-    end)
     
     if GetResourceState("ox_inventory") == "started" then 
         for item, data in pairs(exports.ox_inventory:Items()) do

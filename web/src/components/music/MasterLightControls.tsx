@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { fetchNui } from "@/providers/nui/fetchNui";
 import { useNuiEvent } from "../../providers/nui/useNui";
+import { useLocale } from "../../providers/locale/Locale";
 
 type LightType = "ambient" | "spotlight" | "barlight";
 type FlashSetting = "off" | "low" | "high";
@@ -28,6 +29,7 @@ function flashNumberToString(flash: number): FlashSetting {
 }
 
 export default function MasterLightControls({ stationId }: MasterLightControlsProps) {
+    const locale = useLocale();
     const [state, setState] = useState<LightControlState>({
         enabled: true,
         rotateHorizontal: true,
@@ -129,7 +131,7 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: "#ddd", marginBottom: 4 }}>
-                All Lights
+                {locale("ui_all_lights")}
             </div>
             
             {/* Enable/Disable Toggle */}
@@ -147,8 +149,8 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                     cursor: "pointer",
                     transition: "all 120ms ease",
                 }}
-                title={state.enabled ? "Turn off all lights" : "Turn on all lights"}
-                aria-label={state.enabled ? "Turn off all lights" : "Turn on all lights"}
+                title={state.enabled ? locale("ui_turn_off_all_lights") : locale("ui_turn_on_all_lights")}
+                aria-label={state.enabled ? locale("ui_turn_off_all_lights") : locale("ui_turn_on_all_lights")}
             >
                 {state.enabled ? (
                     <svg
@@ -203,8 +205,8 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                     cursor: "pointer",
                     transition: "all 120ms ease",
                 }}
-                title="Rotate Horizontal (All)"
-                aria-label="Toggle horizontal rotation for all lights"
+                title={locale("ui_rotate_horizontal") + " (All)"}
+                aria-label={locale("ui_toggle_horizontal_rotation") + " for all lights"}
             >
                 <svg
                     width="24"
@@ -235,8 +237,8 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                     cursor: "pointer",
                     transition: "all 120ms ease",
                 }}
-                title="Rotate Vertical (All)"
-                aria-label="Toggle vertical rotation for all lights"
+                title={locale("ui_rotate_vertical") + " (All)"}
+                aria-label={locale("ui_toggle_vertical_rotation") + " for all lights"}
             >
                 <svg
                     width="24"
@@ -273,8 +275,8 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                     flexDirection: "column",
                     gap: 2,
                 }}
-                title={`Flash (All): ${state.flash}`}
-                aria-label={`Flash setting for all lights: ${state.flash}`}
+                title={locale("ui_flash", state.flash) + " (All)"}
+                aria-label={locale("ui_flash_setting", state.flash) + " for all lights"}
             >
                 {state.flash === "off" ? (
                     <svg
@@ -344,8 +346,8 @@ export default function MasterLightControls({ stationId }: MasterLightControlsPr
                     flexDirection: "column",
                     gap: 2,
                 }}
-                title={`Speed (All): ${state.speed}`}
-                aria-label={`Light rotation speed for all lights: ${state.speed}`}
+                title={locale("ui_speed", state.speed) + " (All)"}
+                aria-label={locale("ui_light_rotation_speed", state.speed) + " for all lights"}
             >
                 {state.speed === "slow" ? (
                     <svg

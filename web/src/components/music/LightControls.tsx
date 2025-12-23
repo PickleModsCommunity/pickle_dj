@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { fetchNui } from "@/providers/nui/fetchNui";
 import { useNuiEvent } from "../../providers/nui/useNui";
+import { useLocale } from "../../providers/locale/Locale";
 
 type LightType = "ambient" | "spotlight" | "barlight";
 type FlashSetting = "off" | "low" | "high";
@@ -33,6 +34,7 @@ function flashNumberToString(flash: number): FlashSetting {
 }
 
 export default function LightControls({ lightType, label, stationId, initialState }: LightControlsProps) {
+    const locale = useLocale();
     const defaultState: LightControlState = {
         enabled: true,
         rotateHorizontal: true,
@@ -280,8 +282,8 @@ export default function LightControls({ lightType, label, stationId, initialStat
                     cursor: "pointer",
                     transition: "all 120ms ease",
                 }}
-                title={state.enabled ? "Turn off light" : "Turn on light"}
-                aria-label={state.enabled ? "Turn off light" : "Turn on light"}
+                title={state.enabled ? locale("ui_turn_off_light") : locale("ui_turn_on_light")}
+                aria-label={state.enabled ? locale("ui_turn_off_light") : locale("ui_turn_on_light")}
             >
                 {state.enabled ? (
                     <svg
@@ -336,8 +338,8 @@ export default function LightControls({ lightType, label, stationId, initialStat
                     cursor: "pointer",
                     transition: "all 120ms ease",
                 }}
-                title="Rotate Horizontal"
-                aria-label="Toggle horizontal rotation"
+                title={locale("ui_rotate_horizontal")}
+                aria-label={locale("ui_toggle_horizontal_rotation")}
             >
                 <svg
                     width="24"
@@ -368,8 +370,8 @@ export default function LightControls({ lightType, label, stationId, initialStat
                     cursor: "pointer",
                     transition: "all 120ms ease",
                 }}
-                title="Rotate Vertical"
-                aria-label="Toggle vertical rotation"
+                title={locale("ui_rotate_vertical")}
+                aria-label={locale("ui_toggle_vertical_rotation")}
             >
                 <svg
                     width="24"
@@ -406,8 +408,8 @@ export default function LightControls({ lightType, label, stationId, initialStat
                     flexDirection: "column",
                     gap: 2,
                 }}
-                title={`Flash: ${state.flash}`}
-                aria-label={`Flash setting: ${state.flash}`}
+                title={locale("ui_flash", state.flash)}
+                aria-label={locale("ui_flash_setting", state.flash)}
             >
                 {state.flash === "off" ? (
                     <svg
@@ -477,8 +479,8 @@ export default function LightControls({ lightType, label, stationId, initialStat
                     flexDirection: "column",
                     gap: 2,
                 }}
-                title={`Speed: ${state.speed}`}
-                aria-label={`Light rotation speed: ${state.speed}`}
+                title={locale("ui_speed", state.speed)}
+                aria-label={locale("ui_light_rotation_speed", state.speed)}
             >
                 {state.speed === "slow" ? (
                     <svg
@@ -560,8 +562,8 @@ export default function LightControls({ lightType, label, stationId, initialStat
                     position: "relative",
                     overflow: "hidden",
                 }}
-                title="Edit Colors"
-                aria-label="Color controls"
+                title={locale("ui_edit_colors")}
+                aria-label={locale("ui_color_controls")}
             >
                 {/* Split color display - left half primary, right half secondary */}
                 <div style={{
@@ -598,14 +600,14 @@ export default function LightControls({ lightType, label, stationId, initialStat
                 }}>
                     <div className="modal" onClick={(e) => e.stopPropagation()}>
                         <div className="modalHeader">
-                            <h3 id="color-dialog-title" style={{ margin: 0, fontSize: 16 }}>Edit {label} Colors</h3>
-                            <button className="resetBtn" onClick={handleDialogClose} aria-label="Close color dialog">✕</button>
+                            <h3 id="color-dialog-title" style={{ margin: 0, fontSize: 16 }}>{locale("ui_edit_label_colors", label)}</h3>
+                            <button className="resetBtn" onClick={handleDialogClose} aria-label={locale("ui_close_color_dialog")}>✕</button>
                         </div>
                         <div className="modalBody">
                             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                                 {/* Primary Color */}
                                 <div>
-                                    <div style={{ marginBottom: 8, opacity: 0.8, fontSize: 14 }}>Primary Color</div>
+                                    <div style={{ marginBottom: 8, opacity: 0.8, fontSize: 14 }}>{locale("ui_primary_color")}</div>
                                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                                         <div
                                             style={{
@@ -634,7 +636,7 @@ export default function LightControls({ lightType, label, stationId, initialStat
                                                 borderRadius: 6,
                                                 background: "#0c0c0c",
                                             }}
-                                            aria-label="Primary color picker"
+                                            aria-label={locale("ui_primary_color_picker")}
                                         />
                                     </div>
                                 </div>
@@ -643,7 +645,7 @@ export default function LightControls({ lightType, label, stationId, initialStat
 
                                 {/* Secondary Color */}
                                 <div>
-                                    <div style={{ marginBottom: 8, opacity: 0.8, fontSize: 14 }}>Secondary Color</div>
+                                    <div style={{ marginBottom: 8, opacity: 0.8, fontSize: 14 }}>{locale("ui_secondary_color")}</div>
                                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                                         <div
                                             style={{
@@ -672,7 +674,7 @@ export default function LightControls({ lightType, label, stationId, initialStat
                                                 borderRadius: 6,
                                                 background: "#0c0c0c",
                                             }}
-                                            aria-label="Secondary color picker"
+                                            aria-label={locale("ui_secondary_color_picker")}
                                         />
                                     </div>
                                 </div>

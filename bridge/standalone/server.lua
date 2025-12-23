@@ -30,7 +30,7 @@ end
 
 function GetPlayerCharacterName(source)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    if not xPlayer or not xPlayer.PlayerData then return "Unknown Name" end
+    if not xPlayer or not xPlayer.PlayerData then return _L("unknown_name") end
     return xPlayer.PlayerData.charinfo.firstname .. " " .. xPlayer.PlayerData.charinfo.lastname
 end
 
@@ -240,10 +240,6 @@ CreateThread(function()
     Inventory.HasWeapon = function(source, name, count)
         return (Inventory.GetItemCount(source, name) > 0)
     end
-
-    RegisterCallback("pickle_dj:getInventory", function(source, cb)
-        cb(Inventory.GetInventory(source))
-    end)
 
     for item, data in pairs(QBCore.Shared.Items) do
         Inventory.Items[item] = {label = data.label}

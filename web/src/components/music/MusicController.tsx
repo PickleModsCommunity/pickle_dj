@@ -6,6 +6,7 @@ import { fetchNui } from "@/providers/nui/fetchNui";
 import LightControls from "./LightControls";
 import MasterLightControls from "./MasterLightControls";
 import ParticleEffectsControls from "./ParticleEffectsControls";
+import { useLocale } from "../../providers/locale/Locale";
 type Deck = {
     audio: HTMLAudioElement;
     isPlaying: boolean;
@@ -28,6 +29,7 @@ type PlaylistItem = {
 };
 
 export default function MusicController() {
+    const locale = useLocale();
     const [decks, setDecks] = useState<Record<string, Deck>>({});
     const decksRef = useRef<Record<string, Deck>>({});
     const [crossfade, setCrossfade] = useState(0.5); // 0 = left only, 1 = right only
@@ -309,12 +311,14 @@ export default function MusicController() {
                     deck.audio.currentTime = 0;
                     // Reset playback rate (tempo)
                     deck.audio.playbackRate = 1.0;
+                    // Unmute audio element (in case it was muted during stopBroadcast)
+                    deck.audio.muted = false;
                 } catch {}
                 
                 // Reset to initial state with default track
                 const makeInitialItem = (src: string) => ({
                     id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-                    title: src.split('/').pop() || 'Track',
+                    title: src.split('/').pop() || locale("ui_track"),
                     src,
                     sourceType: "url" as const,
                     baseBpm: null,
@@ -368,6 +372,41 @@ export default function MusicController() {
     const stopBroadcast = async () => {
         if (!isBroadcasting) return;
         setIsBroadcasting(false);
+        
+        // Immediately stop all audio playback before cleaning up
+        // This prevents audio from continuing to play after stopBroadcast is called
+        try {
+            // Mute all audio buses immediately to prevent any audio leakage or glitches
+            if (broadcastBusRef.current) {
+                broadcastBusRef.current.gain.value = 0;
+            }
+            if (masterBusRef.current) {
+                masterBusRef.current.gain.value = 0;
+            }
+            
+            // Mute individual deck gain nodes to stop audio at the source
+            const nodes = nodesRef.current;
+            if (nodes["track_1"]?.gain) {
+                nodes["track_1"].gain.gain.value = 0;
+            }
+            if (nodes["track_2"]?.gain) {
+                nodes["track_2"].gain.gain.value = 0;
+            }
+            
+            // Pause all audio elements immediately
+            const currentDecks = decksRef.current;
+            for (const deck of Object.values(currentDecks)) {
+                try {
+                    if (deck.audio) {
+                        deck.audio.pause();
+                        deck.audio.currentTime = 0;
+                        // Also mute the audio element as an additional safeguard
+                        deck.audio.muted = true;
+                    }
+                } catch {}
+            }
+        } catch {}
+        
         await nuiPost("music_rtc_stop_broadcast", {});
         const map = peerMapRef.current;
         for (const k of Object.keys(map)) {
@@ -1926,47 +1965,47 @@ export default function MusicController() {
                                             step={1}
                                             value={Math.round(masterVolume * 100)}
                                             onChange={(v) => setMasterVolume(v / 100)}
-                                            ariaLabel="Master volume"
+                                            ariaLabel={locale("ui_master_volume")}
                                             showVu={true}
                                             vuLevel={masterVu}
-                                            label="Master"
+                                            label={locale("ui_master")}
                                             valueText={`${Math.round(masterVolume * 100)}%`}
                                         />
                                         <button
                                             className="resetBtn"
                                             onClick={() => setMasterVolume(1)}
-                                            aria-label="Reset master volume"
-                                            title="Reset master volume"
+                                            aria-label={locale("ui_reset_master_volume")}
+                                            title={locale("ui_reset_master_volume")}
                                         >
                                             ↺
                                         </button>
                                     </div>
                                     <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                                         <MasterLightControls stationId={currentStationId} />
-                                        <LightControls lightType="ambient" label="Ambient" stationId={currentStationId} />
-                                        <LightControls lightType="spotlight" label="Spotlight" stationId={currentStationId} />
-                                        <LightControls lightType="barlight" label="Bar Light" stationId={currentStationId} />
+                                        <LightControls lightType="ambient" label={locale("ui_ambient")} stationId={currentStationId} />
+                                        <LightControls lightType="spotlight" label={locale("ui_spotlight")} stationId={currentStationId} />
+                                        <LightControls lightType="barlight" label={locale("ui_bar_light")} stationId={currentStationId} />
                                     </div>
                                     <ParticleEffectsControls stationId={currentStationId} />
                                 </div>
                                 <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6, width: "100%", justifyContent: "center", marginTop: 8 }}>
-                                    <span style={{ fontSize: 12, color: "#ddd", paddingRight: 8, textAlign: "left" }}>Left</span>
+                                    <span style={{ fontSize: 12, color: "#ddd", paddingRight: 8, textAlign: "left" }}>{locale("ui_left")}</span>
                                     <RangeControl
                                         min={0}
                                         max={100}
                                         step={1}
                                         value={Math.round(crossfade * 100)}
                                         onChange={(v) => setCrossfade(v / 100)}
-                                        ariaLabel="Balance"
+                                        ariaLabel={locale("ui_balance")}
                                         style={{ flex: 1, maxWidth: 400 }}
                                         className="!w-full"
                                     />
-                                    <span style={{ fontSize: 12, color: "#ddd", paddingLeft: 8, textAlign: "right" }}>Right</span>
+                                    <span style={{ fontSize: 12, color: "#ddd", paddingLeft: 8, textAlign: "right" }}>{locale("ui_right")}</span>
                                     <button
                                         className="resetBtn"
                                         onClick={() => setCrossfade(0.5)}
-                                        aria-label="Reset balance"
-                                        title="Reset balance"
+                                        aria-label={locale("ui_reset_balance")}
+                                        title={locale("ui_reset_balance")}
                                     >
                                         ↺
                                     </button>
@@ -1976,8 +2015,8 @@ export default function MusicController() {
                                     <button
                                         className="resetBtn"
                                         onClick={toggleMic}
-                                        aria-label={isMicOn ? "Turn off mic" : "Turn on mic"}
-                                        title={isMicOn ? "Turn off mic" : "Turn on mic"}
+                                        aria-label={isMicOn ? locale("ui_turn_off_mic") : locale("ui_turn_on_mic")}
+                                        title={isMicOn ? locale("ui_turn_off_mic") : locale("ui_turn_on_mic")}
                                     >
                                         {isMicOn ? 
                                             <Mic className="w-4 h-4 text-green-500" />
@@ -1992,11 +2031,11 @@ export default function MusicController() {
                                         style={{ width: "100%", background: "#0f0f0f", color: "#eee", border: "1px solid #333", borderRadius: 6, padding: "4px 6px" }}
                                     >
                                         {micDevices.length === 0 ? (
-                                            <option value="">No inputs</option>
+                                            <option value="">{locale("ui_no_inputs")}</option>
                                         ) : (
                                             micDevices.map((d, idx) => (
                                                 <option key={d.deviceId || idx} value={d.deviceId}>
-                                                    {d.label || `Microphone ${idx + 1}`}
+                                                    {d.label || locale("ui_microphone", idx + 1)}
                                                 </option>
                                             ))
                                         )}
@@ -2024,10 +2063,10 @@ export default function MusicController() {
                                     }}
                                     onMouseEnter={(e) => e.currentTarget.style.background = "#b91c1c"}
                                     onMouseLeave={(e) => e.currentTarget.style.background = "#dc2626"}
-                                    title="Stop broadcasting and close controller"
+                                    title={locale("ui_stop_broadcasting_title")}
                                 >
                                     <Square className="w-4 h-4" />
-                                    Stop Broadcasting
+                                    {locale("ui_stop_broadcasting")}
                                 </button>
                             </div>
                         )
@@ -2043,7 +2082,7 @@ export default function MusicController() {
                                         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                                             <div className="text-sm" style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>
                                                 <Plus className="w-4 h-4" />
-                                                Add Song to Playlist
+                                                {locale("ui_add_song_to_playlist")}
                                             </div>
                                         </div>
                                     </div>
@@ -2060,7 +2099,7 @@ export default function MusicController() {
                                                 <button
                                                     className="text-xs hover:text-red-500"
                                                     onClick={(e) => { e.stopPropagation(); removePlaylistItem(deck, item.id); }}
-                                                    title="Remove"
+                                                    title={locale("ui_remove")}
                                                 >
                                                     ✕
                                                 </button>
@@ -2084,7 +2123,7 @@ export default function MusicController() {
                                                 }
                                             }}
                                             role="button"
-                                            aria-label={decks[deck].isPlaying ? "Pause deck" : "Play deck"}
+                                            aria-label={decks[deck].isPlaying ? locale("ui_pause_deck") : locale("ui_play_deck")}
                                             tabIndex={0}
                                         >
                                             <div className="wobbleMask" />
@@ -2102,7 +2141,7 @@ export default function MusicController() {
                                             </div>
                                         </div>
                                         <div className="controls">
-                                            <span>Now Playing:</span>
+                                            <span>{locale("ui_now_playing")}</span>
                                             <strong style={{ maxWidth: 220, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                                 {decks[deck].playlist?.find(x => x.id === decks[deck].currentItemId)?.title || "—"}
                                             </strong>
@@ -2154,14 +2193,14 @@ export default function MusicController() {
                                                         }
                                                     }}
                                                     ariaLabel={`${deck} tempo`}
-													label="Tempo"
+													label={locale("ui_tempo")}
 													valueText={decks[deck].baseBpm ? `${Math.round(decks[deck].baseBpm * decks[deck].tempo)} BPM` : "—"}
                                                 />
                                                 <button
                                                     className="resetBtn"
                                                     onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: 1 } }))}
                                                     aria-label={`${deck} reset tempo`}
-                                                    title="Reset tempo"
+                                                    title={locale("ui_reset_tempo")}
                                                 >
                                                     ↺
                                                 </button>
@@ -2187,14 +2226,14 @@ export default function MusicController() {
                                                     ariaLabel={`${deck} volume`}
                                                     showVu={true}
                                                     vuLevel={vuLevels[deck] ?? 0}
-													label="Volume"
+													label={locale("ui_volume")}
 													valueText={`${Math.round((decks[deck].deckVolume ?? 1) * 100)}%`}
                                                 />
                                                 <button
                                                     className="resetBtn"
                                                     onClick={() => setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], deckVolume: 1 } }))}
                                                     aria-label={`${deck} reset volume`}
-                                                    title="Reset volume"
+                                                    title={locale("ui_reset_volume")}
                                                 >
                                                     ↺
                                                 </button>
@@ -2212,11 +2251,11 @@ export default function MusicController() {
                 <div className="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="add-song-title">
                     <div className="modal">
                         <div className="modalHeader">
-                            <h3 id="add-song-title" style={{ margin: 0, fontSize: 16 }}>Add Song to Playlist</h3>
-                            <button className="resetBtn" onClick={() => setIsAddDialogOpen(false)} aria-label="Close add song dialog">✕</button>
+                            <h3 id="add-song-title" style={{ margin: 0, fontSize: 16 }}>{locale("ui_add_song_to_playlist")}</h3>
+                            <button className="resetBtn" onClick={() => setIsAddDialogOpen(false)} aria-label={locale("ui_close_add_song_dialog")}>✕</button>
                         </div>
                         <div className="modalBody">
-                            <div className="radioRow" role="group" aria-label="Choose target deck">
+                            <div className="radioRow" role="group" aria-label={locale("ui_choose_target_deck")}>
                                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                     <input
                                         type="radio"
@@ -2224,7 +2263,7 @@ export default function MusicController() {
                                         checked={addDialogDeck === "track_1"}
                                         onChange={() => setAddDialogDeck("track_1")}
                                     />
-                                    <span>Left Deck</span>
+                                    <span>{locale("ui_left_deck")}</span>
                                 </label>
                                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                     <input
@@ -2233,12 +2272,12 @@ export default function MusicController() {
                                         checked={addDialogDeck === "track_2"}
                                         onChange={() => setAddDialogDeck("track_2")}
                                     />
-                                    <span>Right Deck</span>
+                                    <span>{locale("ui_right_deck")}</span>
                                 </label>
                             </div>
                             <hr className="divider" />
                             <div>
-                                <div style={{ marginBottom: 4, opacity: 0.8 }}>From URL</div>
+                                <div style={{ marginBottom: 4, opacity: 0.8 }}>{locale("ui_from_url")}</div>
                                 <div className="fieldRow">
                                     <input
                                         type="text"
@@ -2246,7 +2285,7 @@ export default function MusicController() {
                                         value={addDialogUrl}
                                         onChange={(e) => setAddDialogUrl(e.target.value)}
                                         style={{ flex: 1, padding: "6px 8px", borderRadius: 6, border: "1px solid #333", background: "#0c0c0c", color: "#eee" }}
-                                        aria-label="Song URL"
+                                        aria-label={locale("ui_song_url")}
                                     />
                                     <button
                                         className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80"
@@ -2258,14 +2297,14 @@ export default function MusicController() {
                                             setIsAddDialogOpen(false);
                                         }}
                                         disabled={!addDialogUrl.trim()}
-                                        aria-label="Add URL to playlist"
+                                        aria-label={locale("ui_add_url_to_playlist")}
                                     >
-                                        Add URL
+                                        {locale("ui_add_url")}
                                     </button>
                                 </div>
                             </div>
 							<div>
-								<div style={{ marginBottom: 4, opacity: 0.8 }}>Upload Files</div>
+								<div style={{ marginBottom: 4, opacity: 0.8 }}>{locale("ui_upload_files")}</div>
 								<label className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
 									<input
 										type="file"
@@ -2283,7 +2322,7 @@ export default function MusicController() {
 											if (e.currentTarget) e.currentTarget.value = "";
 										}}
 									/>
-									<span>Choose Files…</span>
+									<span>{locale("ui_choose_files")}</span>
 								</label>
 							</div>
                         </div>
@@ -2304,11 +2343,11 @@ export default function MusicController() {
                 >
                     <div className="modal" onClick={(e) => e.stopPropagation()}>
                         <div className="modalHeader">
-                            <h3 id="stop-broadcast-title" style={{ margin: 0, fontSize: 16 }}>Stop Broadcasting?</h3>
+                            <h3 id="stop-broadcast-title" style={{ margin: 0, fontSize: 16 }}>{locale("ui_stop_broadcasting_question")}</h3>
                             <button 
                                 className="resetBtn" 
                                 onClick={() => setIsStopBroadcastDialogOpen(false)} 
-                                aria-label="Close confirmation dialog"
+                                aria-label={locale("ui_close_confirmation_dialog")}
                             >
                                 ✕
                             </button>
@@ -2316,19 +2355,19 @@ export default function MusicController() {
                         <div className="modalBody">
                             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                                 <p style={{ margin: 0, fontSize: 14, color: "#ccc", lineHeight: 1.6 }}>
-                                    Are you sure you want to stop broadcasting?
+                                    {locale("ui_stop_broadcast_confirm")}
                                 </p>
                                 <p style={{ margin: 0, fontSize: 13, color: "#999", lineHeight: 1.5 }}>
-                                    This will:
+                                    {locale("ui_this_will")}
                                 </p>
                                 <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#999", lineHeight: 1.8 }}>
-                                    <li>Stop the broadcast</li>
-                                    <li>Clear all playlists</li>
-                                    <li>Reset all settings to defaults</li>
-                                    <li>Close the controller</li>
+                                    <li>{locale("ui_stop_the_broadcast")}</li>
+                                    <li>{locale("ui_clear_all_playlists")}</li>
+                                    <li>{locale("ui_reset_all_settings")}</li>
+                                    <li>{locale("ui_close_the_controller")}</li>
                                 </ul>
                                 <p style={{ margin: 0, fontSize: 13, color: "#888", lineHeight: 1.5, fontStyle: "italic" }}>
-                                    💡 Tip: If you want to keep the music playing, press <strong>ESC</strong> instead to close the controller without stopping the broadcast.
+                                    {locale("ui_tip_esc")}
                                 </p>
                             </div>
                         </div>
@@ -2338,14 +2377,14 @@ export default function MusicController() {
                                 onClick={() => setIsStopBroadcastDialogOpen(false)}
                                 style={{ cursor: "pointer" }}
                             >
-                                Cancel
+                                {locale("ui_cancel")}
                             </button>
                             <button
                                 className="bg-red-600 px-4 py-2 rounded-md text-white shadow-xs hover:bg-red-700"
                                 onClick={confirmStopBroadcast}
                                 style={{ cursor: "pointer" }}
                             >
-                                Stop Broadcasting
+                                {locale("ui_stop_broadcasting")}
                             </button>
                         </div>
                     </div>

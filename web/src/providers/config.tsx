@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 import { useNuiEvent } from './nui/useNui';
+import { fetchNui } from './nui/fetchNui';
 
 
 export type Config = {
@@ -285,9 +286,11 @@ export const ConfigProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         jobs: {
         },
     });
-    useNuiEvent('setConfig', (data) => {
-        setConfig({ ...config, ...data.config });
-    });
+    useEffect(() => {
+        fetchNui("getConfig", {}).then((data) => {
+            setConfig({ ...config, ...data as Config });
+        });
+    }, []);
     return (
         <ConfigContext.Provider value={{ config, setConfig }}>
             {children}

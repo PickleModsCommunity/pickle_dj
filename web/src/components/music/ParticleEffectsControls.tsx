@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fetchNui } from "@/providers/nui/fetchNui";
 import { useNuiEvent } from "../../providers/nui/useNui";
+import { useLocale } from "../../providers/locale/Locale";
 
 interface ParticleEffectsControlsProps {
     stationId: number | null;
@@ -12,6 +13,7 @@ interface ParticleEffectsState {
 }
 
 export default function ParticleEffectsControls({ stationId }: ParticleEffectsControlsProps) {
+    const locale = useLocale();
     const [state, setState] = useState<ParticleEffectsState>({
         smoke: false,
         fire: false,
@@ -156,7 +158,7 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", height: "358px" }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: "#ddd", marginBottom: 4 }}>
-                Effects
+                {locale("ui_effects")}
             </div>
             
             {/* Smoke Control */}
@@ -178,8 +180,8 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
                     transition: "all 120ms ease",
                     userSelect: "none",
                 }}
-                title="Smoke: Click to toggle, Hold to start/stop"
-                aria-label={state.smoke ? "Turn off smoke" : "Turn on smoke"}
+                title={locale("ui_smoke_toggle")}
+                aria-label={state.smoke ? locale("ui_turn_off_smoke") : locale("ui_turn_on_smoke")}
             >
                 {state.smoke ? (
                     <svg
@@ -232,8 +234,8 @@ export default function ParticleEffectsControls({ stationId }: ParticleEffectsCo
                     transition: "all 120ms ease",
                     userSelect: "none",
                 }}
-                title="Fire: Click to toggle, Hold to start/stop"
-                aria-label={state.fire ? "Turn off fire" : "Turn on fire"}
+                title={locale("ui_fire_toggle")}
+                aria-label={state.fire ? locale("ui_turn_off_fire") : locale("ui_turn_on_fire")}
             >
                 {state.fire ? (
                     <svg
