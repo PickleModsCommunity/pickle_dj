@@ -214,4 +214,9 @@ Language["en"] = {
     ui_fire_toggle = "Fire: Click to toggle, Hold to start/stop",
     ui_turn_off_fire = "Turn off fire",
     ui_turn_on_fire = "Turn on fire",
+    dj_place_without_prop_question = "Place station without a prop?",
+    dj_place_without_prop_description = "If yes, a tennis ball will be shown during placement to indicate the position. The station will be created without a visible prop model.",
+    dj_place_with_prop_description = "Place the station with the selected prop",
+    dj_yes = "Yes",
+    dj_no = "No",
 }

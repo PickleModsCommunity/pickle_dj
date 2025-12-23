@@ -9,11 +9,6 @@ function ShowNotification(text, type)
 	})
 end
 
-function CanAccessGroup(data)
-    -- Unused
-    return false
-end 
-
 RegisterNetEvent(GetCurrentResourceName()..":showNotification", function(text, type)
     ShowNotification(text, type)
 end)

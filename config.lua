@@ -19,7 +19,7 @@ Config.AdminGroups = {
     "superadmin",
 }
 Config.TargetIcons = {
-    dj = "fas fa-shield-alt",
+    dj = "fas fa-music",
 }
 Config.FrameworkSettings = {
     dirtyMoney = "DEFAULT",

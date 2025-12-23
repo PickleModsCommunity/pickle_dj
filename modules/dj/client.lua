@@ -88,6 +88,13 @@ local function RenderDJStationProps(id)
     SetEntityRotation(LocalDJStations[id].entity, 0.0, 0.0, station.heading, 2, true)
     FreezeEntityPosition(LocalDJStations[id].entity, true)
     
+    -- If prop is tennis ball (invisible placeholder), make it invisible and non-colliding
+    local tennisBallHash = GetHashKey("prop_tennis_ball")
+    if station.prop == tennisBallHash then
+        SetEntityAlpha(LocalDJStations[id].entity, 0, false) -- Make invisible
+        SetEntityCollision(LocalDJStations[id].entity, false, false) -- Disable collision
+    end
+    
     -- Initialize entity storage if not already done
     if not LocalDJStations[id].entityData then
         LocalDJStations[id].entityData = {
@@ -239,10 +246,11 @@ function RegisterDJStation(id)
 	if not station then return end
 	LocalDJStations[id] = {
 		interact = CreateInteraction({
+            icon = Config.TargetIcons.dj,
 			label = station.name,
 			coords = station.coords,
 			heading = station.heading,
-            zOffset = -1.0,
+            zOffset = station.prop == GetHashKey("prop_tennis_ball") and 0.0 or -1.0
 		}, function(selection, targetData)
             -- Check if player can access this station before showing menu
             lib.callback('pickle_dj:canAccessStationInteraction', false, function(canAccess, canManage, errorMessage)
@@ -286,7 +294,7 @@ function RegisterDJStation(id)
                                 coords = coords + GetEntityForwardVector(LocalDJStations[id].entity) * 1.0
                                 SetNuiFocus(true, true)
                                 CreateDJCamera()
-                                SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z,
+                                SetCamParams(DJ_CAMERA, coords.x, coords.y, coords.z + (station.prop == GetHashKey("prop_tennis_ball") and -1.0 or 0.0),
                                     -30.0, 0.0, station.heading + 180.0, 90.0, 
                                     2000, 0, 0, 2
                                 )
@@ -1608,14 +1616,29 @@ RegisterCommand('createdj', function()
         end
         local input = lib.inputDialog(_L("dj_create_station_title"), {
             {type = 'input', label = _L("dj_station_name_label"), description = _L("dj_station_name_description"), required = true, min = 1, max = 50},
-            {type = 'select', label = _L("dj_prop_label"), description = _L("dj_prop_description"), options = options, required = true, default = options[1].value}
+            {type = 'select', label = _L("dj_prop_label"), description = _L("dj_prop_description"), options = options, required = true, default = options[1].value},
+            {type = 'checkbox', label = _L("dj_place_without_prop_question"), description = _L("dj_place_without_prop_description")}
         })
         if not input or not input[1] or not input[2] then
             ShowNotification(_L("dj_no_station_selected"), "error")
             return
         end
+        
+        local stationName = input[1]
+        local prop = input[2]
+        local placeWithoutProp = input[3] or false
+        local placementModel = prop
+        local finalProp = prop
+        
+        -- If placing without prop, use tennis ball for placement indicator and as invisible prop
+        if placeWithoutProp then
+            placementModel = GetHashKey("prop_tennis_ball")
+            finalProp = GetHashKey("prop_tennis_ball") -- Use tennis ball as invisible prop for compatibility
+        end
+        
+        isPlacingDJ = true
         local result = StartGizmoEditor({
-            model = input[2],
+            model = placementModel,
             coords = GetEntityCoords(PlayerPedId()),
             rotation = GetEntityRotation(PlayerPedId()),
             rotationOffset = 180.0,
@@ -1624,8 +1647,6 @@ RegisterCommand('createdj', function()
         ShowNotification(_L("dj_place_station_instructions"), "info")
         
         if result and result.position then
-            local stationName = input[1]
-            local prop = input[2]
             isPlacingDJ = false
             
             -- Send to server
@@ -1633,7 +1654,7 @@ RegisterCommand('createdj', function()
                 name = stationName,
                 coords = result.position,
                 heading = result.rotation.z,
-                prop = prop,
+                prop = finalProp,
                 speakers = {}, -- Empty initially, can be added later
                 lights = {} -- Empty initially, lights are auto-generated
             })
