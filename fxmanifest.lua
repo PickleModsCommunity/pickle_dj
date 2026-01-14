@@ -2,7 +2,7 @@ fx_version "cerulean"
 game "gta5"
 author "Pickle Mods"
 description "The best DJ System in FiveM."
-version "v1.1.0"
+version "v1.1.1"
 
 ui_page "nui/index.html"
 
