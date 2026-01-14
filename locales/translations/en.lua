@@ -219,4 +219,5 @@ Language["en"] = {
     dj_place_with_prop_description = "Place the station with the selected prop",
     dj_yes = "Yes",
     dj_no = "No",
+    dj_controller_warning_missing_tokens = "DJ Controller Warning: The Cloudflare tokens are not configured, music won't be audible without them set up in config_sv.lua.",
 }

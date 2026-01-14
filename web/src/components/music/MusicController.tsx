@@ -23,8 +23,8 @@ type Deck = {
 type PlaylistItem = {
     id: string;
     title: string;
-    src: string; // url or object URL
-    sourceType: "url" | "file" | "youtube";
+    src: string; // object URL
+    sourceType: "file";
     baseBpm?: number | null;
 };
 
@@ -60,12 +60,6 @@ export default function MusicController() {
     const peerMapRef = useRef<Record<number, RTCPeerConnection>>({});
     const outboundTrackRef = useRef<MediaStreamTrack | null>(null);
     const streamIdRef = useRef<string | null>(null);
-    // Track per-deck iframe elements (e.g., YouTube embeds)
-    const ytIframeRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
-    // Pollers for YT info (time, duration, title)
-    const ytPollTimersRef = useRef<Record<string, number | null>>({});
-
-    // (YouTube compatibility removed)
 
     // Monitor state: only one deck at a time; first deck -> Left, second -> Right
     const [monitorDeck, setMonitorDeck] = useState<string | null>(null);
@@ -97,13 +91,6 @@ export default function MusicController() {
             (t2 as any).mozPreservesPitch = false;
             (t2 as any).webkitPreservesPitch = false;
         } catch {}
-        const makeInitialItem = (src: string) => ({
-            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-            title: deriveTitleFromUrlOrName(src),
-            src,
-            sourceType: "url" as const,
-            baseBpm: null,
-        });
         setDecks({
             track_1: {
                 audio: t1,
@@ -216,9 +203,6 @@ export default function MusicController() {
                 nodesRef.current["track_2"]?.panner.disconnect();
                 nodesRef.current["track_2"]?.altSource?.disconnect();
             } catch {}
-            // Remove any remaining iframes
-            try { ytIframeRefs.current["track_1"]?.remove(); ytIframeRefs.current["track_1"] = null; } catch {}
-            try { ytIframeRefs.current["track_2"]?.remove(); ytIframeRefs.current["track_2"] = null; } catch {}
             // do not close ctx to avoid pops; it will be GC'ed on page unload
             cancelled = true;
         };
@@ -315,14 +299,6 @@ export default function MusicController() {
                     deck.audio.muted = false;
                 } catch {}
                 
-                // Reset to initial state with default track
-                const makeInitialItem = (src: string) => ({
-                    id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-                    title: src.split('/').pop() || locale("ui_track"),
-                    src,
-                    sourceType: "url" as const,
-                    baseBpm: null,
-                });
                 updated[key] = {
                     ...deck,
                     isPlaying: false,
@@ -554,13 +530,6 @@ export default function MusicController() {
             try { micGainRef.current?.disconnect(); } catch {}
             try { micStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch {} }); } catch {}
             try { navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange); } catch {}
-            // stop YT polling
-            try {
-                (["track_1", "track_2"] as const).forEach(d => {
-                    const t = ytPollTimersRef.current[d];
-                    if (t) { clearInterval(t); ytPollTimersRef.current[d] = null; }
-                });
-            } catch {}
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isBroadcasting]);
@@ -612,18 +581,6 @@ export default function MusicController() {
         decks.track_2.audio.playbackRate = decks.track_2.tempo;
     }, [decks, crossfade, masterVolume, monitorDeck]);
 
-    // Push playbackRate updates to active YouTube players when tempo changes
-    useEffect(() => {
-        (["track_1", "track_2"] as const).forEach((deck) => {
-            const d = decks[deck];
-            if (!d) return;
-            const curr = d.playlist?.find(x => x.id === d.currentItemId);
-            if (!curr || curr.sourceType !== "youtube") return;
-            const rate = d.tempo || 1;
-            try { postMessageToYouTube(deck, "setPlaybackRate", [rate]); } catch {}
-        });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [decks.track_1?.tempo, decks.track_2?.tempo, decks.track_1?.currentItemId, decks.track_2?.currentItemId]);
 
     // Apply monitor routing via stereo panners
     useEffect(() => {
@@ -643,25 +600,8 @@ export default function MusicController() {
         other.panner.pan.value = isFirst ? 1 : -1;
     }, [monitorDeck]);
 
-    // (YouTube volume mapping removed)
-
-    // (YouTube playback rate mapping removed)
 
     // --- BPM Analysis Utilities ---
-    async function analyzeBpmForUrl(url: string): Promise<number | null> {
-        try {
-            const res = await fetch(url);
-            const arrayBuffer = await res.arrayBuffer();
-            const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
-            const ctx: AudioContext = new AudioCtx();
-            const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-            const bpm = estimateBpmFromBuffer(audioBuffer);
-            await ctx.close();
-            return bpm;
-        } catch {
-            return null;
-        }
-    }
 
     async function analyzeBpmFromBlob(blob: Blob): Promise<number | null> {
         try {
@@ -678,129 +618,6 @@ export default function MusicController() {
     }
 
     // --- Playlist helpers ---
-    // Safely attempt to access an iframe's internal <video> when same-origin.
-    // Returns null for cross-origin iframes (e.g., YouTube), which are not directly accessible.
-    const tryGetIframeVideoElement = (deck: string): HTMLVideoElement | null => {
-        try {
-            const iframe = ytIframeRefs.current[deck];
-            if (!iframe) return null;
-            const doc = iframe.contentDocument || iframe.contentWindow?.document || null;
-            if (!doc) return null;
-            const video = doc.querySelector("video") as HTMLVideoElement | null;
-            return video || null;
-        } catch {
-            // Cross-origin access throws; not allowed
-            return null;
-        }
-    };
-
-    // Send a command to a YouTube iframe using its postMessage API (no direct DOM access needed).
-    const postMessageToYouTube = (deck: string, func: string, args: any[] = []) => {
-        const frame = ytIframeRefs.current[deck];
-        const win = frame?.contentWindow;
-        if (!win) return;
-        try {
-            // The player listens for this message shape
-            win.postMessage(JSON.stringify({ event: "command", func, args }), "*");
-        } catch {}
-    };
-
-    // If an accessible iframe <video> is available, route it into the deck's gain chain.
-    const attachIframeVideoToDeck = (deck: string, video: HTMLVideoElement) => {
-        try {
-            const ctx = audioCtxRef.current;
-            if (!ctx) return;
-            const chain = nodesRef.current[deck];
-            if (!chain) return;
-            // Disconnect any previous alternate source
-            try { chain.altSource?.disconnect(); } catch {}
-            chain.altSource = undefined;
-            // Avoid double output (element -> speakers) since we route via WebAudio
-            const src = ctx.createMediaElementSource(video);
-            src.connect(chain.gain);
-            chain.altSource = src;
-            console.log("MusicController: attached iframe video to deck chain", { deck });
-        } catch (e) {
-            console.warn("MusicController: failed to attach iframe video to deck", deck, e);
-        }
-    };
-
-    // Listen for YouTube iframe messages to sync title, currentTime, duration, and play state
-    useEffect(() => {
-        const onMessage = (ev: MessageEvent) => {
-            // Only handle messages from known YT iframes
-            try {
-                if (!ev || !ev.data) return;
-                const data = typeof ev.data === "string" ? (() => { try { return JSON.parse(ev.data); } catch { return null; } })() : ev.data;
-                if (!data || typeof data !== "object") return;
-                // Identify deck by matching source window
-                let fromDeck: string | null = null;
-                for (const key of Object.keys(ytIframeRefs.current)) {
-                    const f = ytIframeRefs.current[key];
-                    if (f && f.contentWindow === ev.source) { fromDeck = key; break; }
-                }
-                if (!fromDeck) return;
-                const deck = fromDeck as "track_1" | "track_2";
-                const evt = data.event;
-                if (evt === "onReady") {
-                    // Subscribe to updates and request initial info
-                    postMessageToYouTube(deck, "addEventListener", ["infoDelivery"]);
-                    postMessageToYouTube(deck, "addEventListener", ["onStateChange"]);
-                    postMessageToYouTube(deck, "getVideoData");
-                    postMessageToYouTube(deck, "getDuration");
-                    postMessageToYouTube(deck, "getCurrentTime");
-                    const t = decksRef.current[deck]?.tempo || 1;
-                    try { postMessageToYouTube(deck, "setPlaybackRate", [t]); } catch {}
-                    // Autoplay if previously playing
-                    if (decksRef.current[deck]?.isPlaying) {
-                        postMessageToYouTube(deck, "playVideo");
-                    }
-                    return;
-                }
-                if (evt === "onStateChange") {
-                    const st = data.info;
-                    if (st === 1) { // playing
-                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }) : prev);
-                    } else if (st === 2) { // paused
-                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }) : prev);
-                    } else if (st === 0) { // ended
-                        // advance playlist
-                        setTimeout(() => { try { advancePlaylist(deck); } catch {} }, 0);
-                    }
-                    return;
-                }
-                if (evt === "infoDelivery") {
-                    const info = data.info || {};
-                    // Sync time and duration
-                    if (typeof info.currentTime === "number") {
-                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], currentTime: info.currentTime } }) : prev);
-                    }
-                    if (typeof info.duration === "number" && isFinite(info.duration)) {
-                        setDecks(prev => prev[deck] ? ({ ...prev, [deck]: { ...prev[deck], duration: info.duration } }) : prev);
-                    }
-                    // Sync title when available
-                    if (info.videoData && typeof info.videoData.title === "string" && info.videoData.title.trim().length > 0) {
-                        const title = info.videoData.title.trim();
-                        setDecks(prev => {
-                            const pd = prev[deck];
-                            if (!pd) return prev;
-                            const list = pd.playlist || [];
-                            const currId = pd.currentItemId;
-                            const idx = list.findIndex(it => it.id === currId);
-                            if (idx === -1) return prev;
-                            const nextList = [...list];
-                            nextList[idx] = { ...nextList[idx], title };
-                            return { ...prev, [deck]: { ...pd, playlist: nextList } };
-                        });
-                    }
-                    return;
-                }
-            } catch {}
-        };
-        window.addEventListener("message", onMessage);
-        return () => window.removeEventListener("message", onMessage);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
 
     const deriveTitleFromUrlOrName = (input: string): string => {
         try {
@@ -814,33 +631,6 @@ export default function MusicController() {
         }
     };
 
-    const fetchYouTubeTitle = async (url: string): Promise<string | null> => {
-        try {
-            // Extract video ID from various YouTube URL formats
-            const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([A-Za-z0-9_-]{11})/);
-            if (!videoIdMatch || !videoIdMatch[1]) {
-                return null;
-            }
-            
-            // Use YouTube oEmbed API to get video title
-            const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-            const response = await fetch(oembedUrl);
-            
-            if (!response.ok) {
-                return null;
-            }
-            
-            const data = await response.json();
-            if (data && typeof data.title === "string" && data.title.trim().length > 0) {
-                return data.title.trim();
-            }
-            
-            return null;
-        } catch (error) {
-            console.error("Failed to fetch YouTube title:", error);
-            return null;
-        }
-    };
 
     const getNextPlaylistItemId = (deck: "track_1" | "track_2"): string | null => {
         const d = decksRef.current[deck];
@@ -859,67 +649,6 @@ export default function MusicController() {
         await loadPlaylistItem(deck, nextId);
     };
 
-    const addYoutubeUrlToPlaylist = async (deck: string, url: string) => {
-        // Start with a placeholder title
-        const item: PlaylistItem = {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-            title: deriveTitleFromUrlOrName(url),
-            src: url,
-            sourceType: "youtube",
-            baseBpm: null,
-        };
-        
-        // Add item to playlist immediately with placeholder title
-        setDecks(prev => {
-            const list = prev[deck]?.playlist || [];
-            return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
-        });
-        
-        // Fetch the actual title and update it
-        const fetchedTitle = await fetchYouTubeTitle(url);
-        if (fetchedTitle) {
-            setDecks(prev => {
-                const pd = prev[deck];
-                if (!pd) return prev;
-                const list = pd.playlist || [];
-                const idx = list.findIndex(it => it.id === item.id);
-                if (idx === -1) return prev;
-                const nextList = [...list];
-                nextList[idx] = { ...nextList[idx], title: fetchedTitle };
-                return { ...prev, [deck]: { ...pd, playlist: nextList } };
-            });
-        }
-    };
-
-    const addUrlToPlaylist = async (deck: string, url: string) => {
-        if (url.includes("youtube.com") || url.includes("youtu.be")) {
-            await addYoutubeUrlToPlaylist(deck, url);
-            return;
-        }
-        const item: PlaylistItem = {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-            title: deriveTitleFromUrlOrName(url),
-            src: url,
-            sourceType: "url",
-            baseBpm: null,
-        };
-        setDecks(prev => {
-            const list = prev[deck]?.playlist || [];
-            return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
-        });
-        let bpm: number | null = null;
-        bpm = await analyzeBpmForUrl(url);
-        if (bpm) {
-            setDecks(prev => {
-                const list = prev[deck]?.playlist || [];
-                const idx = list.findIndex(it => it.id === item.id);
-                if (idx === -1) return prev;
-                const next = [...list];
-                next[idx] = { ...next[idx], baseBpm: bpm };
-                return { ...prev, [deck]: { ...prev[deck], playlist: next } };
-            });
-        }
-    };
 
     const addFileToPlaylist = async (deck: string, file: File) => {
         const url = URL.createObjectURL(file);
@@ -954,112 +683,6 @@ export default function MusicController() {
     	if (!item) return;
     	const wasPlaying = d.isPlaying === true;
     	// Configure audio element
-    	if (item.sourceType === "youtube" && item.src) {
-    		// Show YouTube video as iframe overlay (for visual, not for playback)
-    		const ytIdMatch = item.src.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([A-Za-z0-9_-]{11})/);
-    		const ytId = ytIdMatch ? ytIdMatch[1] : null;
-    		if (ytId) {
-    			const ytIframe = document.createElement("iframe");
-    			// Enable JS API so we can control via postMessage (still no raw DOM access)
-    			const origin = (() => {
-    				try { return window.location.origin; } catch { return ""; }
-    			})();
-    			ytIframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&controls=1&playsinline=1&enablejsapi=1&origin=${origin}`;
-    			ytIframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
-    			ytIframe.width = "1";
-    			ytIframe.height = "1";
-    			ytIframe.frameBorder = "0";
-    			ytIframe.style.position = "absolute";
-    			ytIframe.style.zIndex = "-1";
-    			ytIframe.style.top = "-9999px";
-    			ytIframe.style.left = "-9999px";
-    			ytIframe.style.opacity = "0";
-    			ytIframe.style.pointerEvents = "none";
-    			ytIframe.id = `yt-iframe-${deck}`;
-    			document.body.appendChild(ytIframe);
-    			// Track ref for safe access / postMessage control
-    			ytIframeRefs.current[deck] = ytIframe;
-                // Commit selection state for YouTube items as well
-                setDecks(prev => {
-                    const prevDeck = prev[deck];
-                    if (!prevDeck) return prev;
-                    return {
-                        ...prev,
-                        [deck]: {
-                            ...prevDeck,
-                            baseBpm: item.baseBpm ?? null,
-                            currentTime: 0,
-                            duration: 0,
-                            isPlaying: false,
-                            objectUrl: undefined,
-                            currentItemId: item.id,
-                        }
-                    };
-                });
-     			ytIframe.onload = () => {
-                    // Kick off handshake per YT embed protocol
-                    try {
-                        ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: ytIframe.id, channel: "widget" }), "*");
-                    } catch {}
-    				const v = tryGetIframeVideoElement(deck);
-    				if (v) {
-    					console.log("MusicController: iframe <video> accessible (same-origin)", { deck, video: v });
-    					attachIframeVideoToDeck(deck, v);
-    				} else {
-    					console.log("MusicController: iframe <video> not accessible (likely cross-origin). Use postMessage API for control.", { deck });
-    					// Example: notify player to start or query state
-    					postMessageToYouTube(deck, "playVideo");
-    				}
-                    // Subscribe to events and fetch initial info
-                    try {
-                        postMessageToYouTube(deck, "addEventListener", ["onReady"]);
-                        postMessageToYouTube(deck, "addEventListener", ["infoDelivery"]);
-                        postMessageToYouTube(deck, "addEventListener", ["onStateChange"]);
-                        postMessageToYouTube(deck, "getVideoData");
-                        postMessageToYouTube(deck, "getDuration");
-                        postMessageToYouTube(deck, "getCurrentTime");
-                        const t = decksRef.current[deck]?.tempo || 1;
-                        postMessageToYouTube(deck, "setPlaybackRate", [t]);
-                    } catch {}
-                    // Start polling for robustness
-                    try {
-                        // Clear any existing poller
-                        const prev = ytPollTimersRef.current[deck];
-                        if (prev) { clearInterval(prev); ytPollTimersRef.current[deck] = null; }
-                        ytPollTimersRef.current[deck] = window.setInterval(() => {
-                            postMessageToYouTube(deck, "getCurrentTime");
-                            postMessageToYouTube(deck, "getDuration");
-                            postMessageToYouTube(deck, "getVideoData");
-                        }, 500);
-                    } catch {}
-    			};
-    			// Remove any previous YouTube iframe for this deck when loading a new item or on cleanup
-    			setTimeout(() => {
-    				const prev = document.getElementById(`yt-iframe-${deck}`);
-    				if (prev && prev !== ytIframe) prev.remove();
-    			}, 100);
-    		}
-    	} else {
-            // If a previous iframe-based source was attached, tear it down when switching to non-YouTube
-            try {
-                const chain = nodesRef.current[deck];
-                if (chain?.altSource) {
-                    try { chain.altSource.disconnect(); } catch {}
-                    chain.altSource = undefined;
-                }
-            } catch {}
-            try {
-                const prevIframe = ytIframeRefs.current[deck];
-                if (prevIframe) {
-                    prevIframe.remove();
-                    ytIframeRefs.current[deck] = null;
-                }
-            } catch {}
-            // Stop any YT polling for this deck
-            try {
-                const t = ytPollTimersRef.current[deck];
-                if (t) { clearInterval(t); ytPollTimersRef.current[deck] = null; }
-            } catch {}
             try { d.audio.pause(); } catch {}
             try {
                 d.audio.src = item.src;
@@ -1109,9 +732,7 @@ export default function MusicController() {
             // BPM analysis if missing
             if (item.baseBpm == null) {
                 let bpm: number | null = null;
-                if (item.sourceType === "url") {
-                    bpm = await analyzeBpmForUrl(item.src);
-                } else if (item.sourceType === "file") {
+                if (item.sourceType === "file") {
                     bpm = await (async () => {
                         try { const res = await fetch(item.src); const b = await res.blob(); return await analyzeBpmFromBlob(b); } catch { return null; }
                     })();
@@ -1154,21 +775,6 @@ export default function MusicController() {
                 try { d.audio.src = ""; } catch {}
                 try { d.audio.removeAttribute("src"); } catch {}
                 try { d.audio.currentTime = 0; d.audio.load(); } catch {}
-                // Disconnect any iframe-based alt source and remove iframe
-                try {
-                    const chain = nodesRef.current[deck];
-                    if (chain?.altSource) {
-                        try { chain.altSource.disconnect(); } catch {}
-                        chain.altSource = undefined;
-                    }
-                } catch {}
-                try {
-                    const prevIframe = ytIframeRefs.current[deck];
-                    if (prevIframe) {
-                        prevIframe.remove();
-                        ytIframeRefs.current[deck] = null;
-                    }
-                } catch {}
             }
         }
 
@@ -1186,7 +792,6 @@ export default function MusicController() {
 
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [addDialogDeck, setAddDialogDeck] = useState<"track_1" | "track_2">("track_1");
-    const [addDialogUrl, setAddDialogUrl] = useState("");
     const [isStopBroadcastDialogOpen, setIsStopBroadcastDialogOpen] = useState(false);
 
     // Estimate BPM via simple onset-envelope autocorrelation (downsampled to ~200 Hz)
@@ -1275,19 +880,6 @@ export default function MusicController() {
         if (!currentItem) {
             try { d.audio.pause(); } catch {}
             setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
-            return;
-        }
-
-        // Handle YouTube items via postMessage API
-        if (currentItem.sourceType === "youtube") {
-            if (d.isPlaying) {
-                postMessageToYouTube(deck, "pauseVideo");
-                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: false } }));
-            } else {
-                try { await audioCtxRef.current?.resume?.(); } catch {}
-                postMessageToYouTube(deck, "playVideo");
-                setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], isPlaying: true } }));
-            }
             return;
         }
 
@@ -2155,14 +1747,8 @@ export default function MusicController() {
                                                 value={Math.min(decks[deck].currentTime || 0, decks[deck].duration || 0)}
                                                 onChange={(to) => {
                                                     const curr = decks[deck];
-                                                    const currentItem = curr.playlist?.find(x => x.id === curr.currentItemId);
-                                                    if (currentItem?.sourceType === "youtube") {
-                                                        postMessageToYouTube(deck, "seekTo", [to, true]);
-                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
-                                                    } else {
-                                                        curr.audio.currentTime = to;
-                                                        setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
-                                                    }
+                                                    curr.audio.currentTime = to;
+                                                    setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], currentTime: to } }));
                                                 }}
                                                 ariaLabel={`${deck} position`}
                                                 disabled={!decks[deck].duration || decks[deck].duration === 0}
@@ -2186,11 +1772,6 @@ export default function MusicController() {
                                                     onChange={(v) => {
                                                         const nextTempo = v / 100;
                                                         setDecks(prev => ({ ...prev, [deck]: { ...prev[deck], tempo: nextTempo } }));
-                                                        // If YouTube, push rate immediately
-                                                        const currentItem = decks[deck].playlist?.find(x => x.id === decks[deck].currentItemId);
-                                                        if (currentItem?.sourceType === "youtube") {
-                                                            postMessageToYouTube(deck, "setPlaybackRate", [nextTempo]);
-                                                        }
                                                     }}
                                                     ariaLabel={`${deck} tempo`}
 													label={locale("ui_tempo")}
@@ -2276,33 +1857,6 @@ export default function MusicController() {
                                 </label>
                             </div>
                             <hr className="divider" />
-                            <div>
-                                <div style={{ marginBottom: 4, opacity: 0.8 }}>{locale("ui_from_url")}</div>
-                                <div className="fieldRow">
-                                    <input
-                                        type="text"
-                                        placeholder="https://example.com/track.mp3"
-                                        value={addDialogUrl}
-                                        onChange={(e) => setAddDialogUrl(e.target.value)}
-                                        style={{ flex: 1, padding: "6px 8px", borderRadius: 6, border: "1px solid #333", background: "#0c0c0c", color: "#eee" }}
-                                        aria-label={locale("ui_song_url")}
-                                    />
-                                    <button
-                                        className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80"
-                                        onClick={async () => {
-                                            const url = addDialogUrl.trim();
-                                            if (!url) return;
-                                            await addUrlToPlaylist(addDialogDeck, url);
-                                            setAddDialogUrl("");
-                                            setIsAddDialogOpen(false);
-                                        }}
-                                        disabled={!addDialogUrl.trim()}
-                                        aria-label={locale("ui_add_url_to_playlist")}
-                                    >
-                                        {locale("ui_add_url")}
-                                    </button>
-                                </div>
-                            </div>
 							<div>
 								<div style={{ marginBottom: 4, opacity: 0.8 }}>{locale("ui_upload_files")}</div>
 								<label className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>

@@ -1279,6 +1279,24 @@ RegisterNetEvent('pickle_dj:openController', function(stationId)
         return
     end
     
+    -- Check if Cloudflare tokens are configured
+    local apiToken = ConfigSV.StreamingServer.cloudflare.apiToken
+    local turnTokenId = ConfigSV.StreamingServer.cloudflare.turnTokenId
+    local missingTokens = {}
+    
+    if not apiToken or apiToken == "" or apiToken == "API_TOKEN_HERE" then
+        table.insert(missingTokens, "API Token")
+    end
+    
+    if not turnTokenId or turnTokenId == "" or turnTokenId == "TURN_TOKEN_HERE" then
+        table.insert(missingTokens, "TURN Token ID")
+    end
+    
+    if #missingTokens > 0 then
+        local message = _L("dj_controller_warning_missing_tokens")
+        ShowNotification(source, message, "error")
+    end
+    
     -- Get the music instance for this station
     local musicInstanceId = station.streamId
     local MusicInstances = exports['pickle_dj']:GetMusicInstances() or {}
