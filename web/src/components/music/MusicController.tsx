@@ -751,7 +751,6 @@ export default function MusicController() {
                     });
                 }
             }
-        }
     };
 
     const removePlaylistItem = (deck: string, itemId: string) => {

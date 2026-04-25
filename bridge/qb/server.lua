@@ -180,10 +180,11 @@ CreateThread(function()
     Inventory.Ready = false
 
     Inventory.CanCarryItem = function(source, name, count)
-        local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-        local weight = QBCore.Player.GetTotalWeight(xPlayer.PlayerData.items)
-        local item = QBCore.Shared.Items[name:lower()]
-        return ((weight + (item.weight * count)) <= QBCore.Config.Player.MaxWeight)
+        return true -- Disabled for QB | QBX
+        -- local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+        -- local weight = QBCore.Player.GetTotalWeight(xPlayer.PlayerData.items)
+        -- local item = QBCore.Shared.Items[name:lower()]
+        -- return ((weight + (item.weight * count)) <= QBCore.Config.Player.MaxWeight)
     end
 
     Inventory.GetInventory = function(source)
