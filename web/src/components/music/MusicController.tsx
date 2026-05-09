@@ -23,9 +23,18 @@ type Deck = {
 type PlaylistItem = {
     id: string;
     title: string;
-    src: string; // object URL
+    src: string; // object URL or remote URL
     sourceType: "file";
     baseBpm?: number | null;
+};
+
+type LibraryItem = {
+    id: number;
+    title: string;
+    url: string;
+    mime?: string;
+    file_size?: number;
+    created_at?: string;
 };
 
 export default function MusicController() {
@@ -791,6 +800,131 @@ export default function MusicController() {
 
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [addDialogDeck, setAddDialogDeck] = useState<"track_1" | "track_2">("track_1");
+    const addDialogSessionRef = useRef(0);
+    const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
+    const [libraryLoading, setLibraryLoading] = useState(false);
+    const [libraryUploading, setLibraryUploading] = useState(false);
+    const [libraryAvailable, setLibraryAvailable] = useState(true);
+    const [libraryUploadEnabled, setLibraryUploadEnabled] = useState(false);
+    const [libraryError, setLibraryError] = useState<string | null>(null);
+    const [playlistDragging, setPlaylistDragging] = useState(false);
+    const [libraryDragging, setLibraryDragging] = useState(false);
+
+    const refreshLibrary = async () => {
+        setLibraryLoading(true);
+        try {
+            const res = await fetchNui<{ ok: boolean; items?: LibraryItem[]; error?: string; uploadEnabled?: boolean }>("library_list", {});
+            if (res && res.ok && Array.isArray(res.items)) {
+                setLibraryItems(res.items);
+                setLibraryAvailable(true);
+                setLibraryUploadEnabled(!!res.uploadEnabled);
+            } else if (res && res.error === "disabled") {
+                setLibraryAvailable(false);
+                setLibraryUploadEnabled(false);
+            }
+        } catch {
+            // NUI not reachable in dev; ignore
+        } finally {
+            setLibraryLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!isAddDialogOpen) return;
+        refreshLibrary();
+    }, [isAddDialogOpen]);
+
+    // CEF/NUI loses keyboard+mouse focus on the overlay when an OS file
+    // dialog opens. When the dialog closes the window regains focus, but
+    // SetNuiFocus state isn't automatically restored, so subsequent clicks
+    // bypass the NUI. Re-assert focus on every focus event.
+    useEffect(() => {
+        const reassert = () => { fetchNui("keepFocus", {}).catch(() => {}); };
+        window.addEventListener("focus", reassert);
+        document.addEventListener("visibilitychange", reassert);
+        return () => {
+            window.removeEventListener("focus", reassert);
+            document.removeEventListener("visibilitychange", reassert);
+        };
+    }, []);
+
+    const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => {
+            const result = r.result as string;
+            const i = result.indexOf(",");
+            resolve(i >= 0 ? result.slice(i + 1) : result);
+        };
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(file);
+    });
+
+    const uploadToLibrary = async (file: File) => {
+        setLibraryUploading(true);
+        setLibraryError(null);
+        try {
+            const dataBase64 = await fileToBase64(file);
+            const res = await fetchNui<{ ok: boolean; item?: LibraryItem; error?: string; maxFileSizeMB?: number }>("library_upload", {
+                filename: file.name,
+                mimeType: file.type || "audio/mpeg",
+                dataBase64,
+                title: deriveTitleFromUrlOrName(file.name),
+            });
+            if (res && res.ok && res.item) {
+                setLibraryItems(prev => [res.item!, ...prev]);
+            } else if (res && res.error === "too_large") {
+                setLibraryError(locale("ui_file_too_large"));
+            } else if (res && res.error === "library_full") {
+                setLibraryError(locale("ui_library_full"));
+            } else if (res && res.error === "disabled") {
+                setLibraryAvailable(false);
+            } else {
+                setLibraryError(locale("ui_upload_failed"));
+            }
+        } catch {
+            setLibraryError(locale("ui_upload_failed"));
+        } finally {
+            setLibraryUploading(false);
+        }
+    };
+
+    const deleteLibraryItem = async (id: number) => {
+        try {
+            const res = await fetchNui<{ ok: boolean }>("library_delete", { id });
+            if (res && res.ok) {
+                setLibraryItems(prev => prev.filter(x => x.id !== id));
+            }
+        } catch {}
+    };
+
+    const addLibraryItemToPlaylist = async (deck: string, lib: LibraryItem) => {
+        const item: PlaylistItem = {
+            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            title: lib.title,
+            src: lib.url,
+            sourceType: "file",
+            baseBpm: null,
+        };
+        setDecks(prev => {
+            const list = prev[deck]?.playlist || [];
+            return { ...prev, [deck]: { ...prev[deck], playlist: [...list, item] } };
+        });
+        try {
+            const res = await fetch(lib.url);
+            const blob = await res.blob();
+            const bpm = await analyzeBpmFromBlob(blob);
+            if (bpm) {
+                setDecks(prev => {
+                    const list = prev[deck]?.playlist || [];
+                    const idx = list.findIndex(it => it.id === item.id);
+                    if (idx === -1) return prev;
+                    const next = [...list];
+                    next[idx] = { ...next[idx], baseBpm: bpm };
+                    return { ...prev, [deck]: { ...prev[deck], playlist: next } };
+                });
+            }
+        } catch {}
+    };
     const [isStopBroadcastDialogOpen, setIsStopBroadcastDialogOpen] = useState(false);
 
     // Estimate BPM via simple onset-envelope autocorrelation (downsampled to ~200 Hz)
@@ -1668,7 +1802,7 @@ export default function MusicController() {
                                     <div
                                         className="cursor-pointer hover:bg-primary/10 transition-colors duration-200 px-4"
                                         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%", paddingTop: 8, paddingBottom: 8, borderBottom: "1px solid #222" }}
-                                        onClick={(e) => { e.stopPropagation(); setAddDialogDeck(deck as "track_1" | "track_2"); setIsAddDialogOpen(true); }}
+                                        onClick={(e) => { e.stopPropagation(); setAddDialogDeck(deck as "track_1" | "track_2"); addDialogSessionRef.current += 1; setIsAddDialogOpen(true); }}
                                     >
                                         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                                             <div className="text-sm" style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>
@@ -1858,26 +1992,129 @@ export default function MusicController() {
                             <hr className="divider" />
 							<div>
 								<div style={{ marginBottom: 4, opacity: 0.8 }}>{locale("ui_upload_files")}</div>
-								<label className="bg-secondary px-4 py-2 rounded-md text-secondary-foreground shadow-xs hover:bg-secondary/80" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-									<input
-										type="file"
-										accept="audio/*"
-										multiple
-										style={{ display: "none" }}
-										onChange={async (e) => {
-											const files = e.target.files;
-											if (files && files.length > 0) {
-												for (const file of Array.from(files)) {
-													await addFileToPlaylist(addDialogDeck, file);
-												}
-												setIsAddDialogOpen(false);
-											}
-											if (e.currentTarget) e.currentTarget.value = "";
-										}}
-									/>
-									<span>{locale("ui_choose_files")}</span>
-								</label>
+								<div
+									tabIndex={0}
+									onDragEnter={(e) => { e.preventDefault(); setPlaylistDragging(true); }}
+									onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+									onDragLeave={() => setPlaylistDragging(false)}
+									onDrop={async (e) => {
+										e.preventDefault();
+										setPlaylistDragging(false);
+										const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
+										if (files.length === 0) return;
+										const session = addDialogSessionRef.current;
+										for (const file of files) await addFileToPlaylist(addDialogDeck, file);
+										if (addDialogSessionRef.current === session) setIsAddDialogOpen(false);
+									}}
+									onPaste={async (e) => {
+										const files = Array.from(e.clipboardData?.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
+										if (files.length === 0) return;
+										e.preventDefault();
+										const session = addDialogSessionRef.current;
+										for (const file of files) await addFileToPlaylist(addDialogDeck, file);
+										if (addDialogSessionRef.current === session) setIsAddDialogOpen(false);
+									}}
+									style={{
+										border: `1px dashed ${playlistDragging ? "#888" : "#444"}`,
+										background: playlistDragging ? "#222" : "transparent",
+										borderRadius: 6,
+										padding: 14,
+										textAlign: "center",
+										fontSize: 12,
+										opacity: 0.85,
+										cursor: "default",
+										outline: "none",
+									}}
+								>
+									{locale("ui_drop_or_paste_files")}
+								</div>
 							</div>
+                            {libraryAvailable && (
+                                <>
+                                    <hr className="divider" />
+                                    <div>
+                                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                                            <div style={{ opacity: 0.8 }}>{locale("ui_my_library")}</div>
+                                        </div>
+                                        {libraryUploadEnabled && (
+                                            <div
+                                                tabIndex={0}
+                                                onDragEnter={(e) => { if (!libraryUploading) { e.preventDefault(); setLibraryDragging(true); } }}
+                                                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = libraryUploading ? "none" : "copy"; }}
+                                                onDragLeave={() => setLibraryDragging(false)}
+                                                onDrop={async (e) => {
+                                                    e.preventDefault();
+                                                    setLibraryDragging(false);
+                                                    if (libraryUploading) return;
+                                                    const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
+                                                    for (const f of files) await uploadToLibrary(f);
+                                                }}
+                                                onPaste={async (e) => {
+                                                    if (libraryUploading) return;
+                                                    const files = Array.from(e.clipboardData?.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
+                                                    if (files.length === 0) return;
+                                                    e.preventDefault();
+                                                    for (const f of files) await uploadToLibrary(f);
+                                                }}
+                                                style={{
+                                                    border: `1px dashed ${libraryDragging ? "#888" : "#444"}`,
+                                                    background: libraryDragging ? "#222" : "transparent",
+                                                    borderRadius: 6,
+                                                    padding: 10,
+                                                    textAlign: "center",
+                                                    fontSize: 11,
+                                                    opacity: libraryUploading ? 0.5 : 0.85,
+                                                    marginBottom: 6,
+                                                    outline: "none",
+                                                }}
+                                            >
+                                                {libraryUploading ? locale("ui_uploading") : locale("ui_drop_or_paste_to_upload")}
+                                            </div>
+                                        )}
+                                        {libraryError && (
+                                            <div style={{ color: "#f87171", fontSize: 12, marginBottom: 6 }}>{libraryError}</div>
+                                        )}
+                                        <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+                                            {libraryLoading && libraryItems.length === 0 ? (
+                                                <div style={{ opacity: 0.6, fontSize: 12 }}>…</div>
+                                            ) : libraryItems.length === 0 ? (
+                                                <div style={{ opacity: 0.6, fontSize: 12 }}>{locale("ui_library_empty")}</div>
+                                            ) : (
+                                                libraryItems.map(item => (
+                                                    <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", borderBottom: "1px solid #222" }}>
+                                                        <div style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }} title={item.title}>{item.title}</div>
+                                                        <button
+                                                            className="resetBtn"
+                                                            style={{ fontSize: 12, padding: "2px 8px" }}
+                                                            onClick={async () => {
+                                                                await addLibraryItemToPlaylist(addDialogDeck, item);
+                                                                setIsAddDialogOpen(false);
+                                                            }}
+                                                            aria-label={locale("ui_add_to_deck")}
+                                                        >
+                                                            {locale("ui_add_to_deck")}
+                                                        </button>
+                                                        <button
+                                                            className="resetBtn"
+                                                            style={{ fontSize: 12, padding: "2px 8px", color: "#f87171" }}
+                                                            onClick={() => deleteLibraryItem(item.id)}
+                                                            aria-label={locale("ui_delete")}
+                                                        >
+                                                            ✕
+                                                        </button>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                            {!libraryAvailable && (
+                                <>
+                                    <hr className="divider" />
+                                    <div style={{ opacity: 0.6, fontSize: 12 }}>{locale("ui_library_unavailable")}</div>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>
