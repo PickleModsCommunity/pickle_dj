@@ -26,7 +26,7 @@ local function getStationLightControls(stationId)
         StationLightControls[stationId] = {
             lights = {
                 ambient = {
-                    enabled = true,
+                    enabled = false,
                     rotateHorizontal = true,
                     rotateVertical = false,
                     flash = GetFlashValue("low"), -- low
@@ -35,7 +35,7 @@ local function getStationLightControls(stationId)
                     secondaryColor = {255, 100, 0}, -- RGB: orange
                 },
                 spotlight = {
-                    enabled = true,
+                    enabled = false,
                     rotateHorizontal = true,
                     rotateVertical = false, 
                     flash = GetFlashValue("off"), -- off
@@ -44,7 +44,7 @@ local function getStationLightControls(stationId)
                     secondaryColor = {0, 200, 255}, -- RGB: cyan
                 },
                 barlight = {
-                    enabled = true,
+                    enabled = false,
                     rotateHorizontal = true,
                     rotateVertical = true,
                     flash = GetFlashValue("low"), -- low

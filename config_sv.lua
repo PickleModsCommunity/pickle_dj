@@ -11,14 +11,14 @@ ConfigSV.StreamingServer = {
 -- Players upload audio files to your FiveManage account; metadata is saved
 -- to a per-player database so each player can access their own tracks across
 -- sessions. Tracks are NOT shared between players.
--- Docs: https://docs.fivemanage.com/guides/uploading-files/audio
+--
+-- Uses the multipart file-upload endpoint:
+--   POST https://api.fivemanage.com/api/file   (multipart field "file")
+--   Docs: https://docs.fivemanage.com/api-reference/files/upload-file-multipart
+-- Your API key must be scoped for the "Files" API.
 ConfigSV.FiveManage = {
-    enabled = false,                                    -- master enable
-    apiKey = "",                                        -- FiveManage API key with audio upload scope
-    uploadUrl = "https://api.fivemanage.com/api/audio", -- audio upload endpoint
-    -- Files are deleted from FiveManage by issuing DELETE {deleteUrl}/{fileId}.
-    -- The fileId is parsed from the upload response.
-    deleteUrl = "https://api.fivemanage.com/api/audio",
+    enabled = true,                                     -- master enable
+    apiKey = "nCMiCPA2qV7BnslUhVGTtNkmh5DnQgDT",         -- FiveManage API key (Files scope)
     maxFileSizeMB = 12,                                 -- per-file size limit enforced server-side
     maxTracksPerPlayer = 50,                            -- per-player library cap (0 = unlimited)
 }

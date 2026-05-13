@@ -2,7 +2,7 @@ fx_version "cerulean"
 game "gta5"
 author "Pickle Mods"
 description "The best DJ System in FiveM."
-version "v1.1.2"
+version "v1.1.3"
 
 ui_page "nui/index.html"
 
@@ -33,10 +33,10 @@ client_scripts {
 
 server_scripts {
 	"@mysql-async/lib/MySQL.lua",
+	"config_sv.lua",
 	"bridge/**/**/server.lua",
 	"modules/**/server.lua",
     "core/server.lua",
-	"config_sv.lua",
 }
 
 lua54 'yes'

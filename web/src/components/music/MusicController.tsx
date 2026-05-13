@@ -807,8 +807,15 @@ export default function MusicController() {
     const [libraryAvailable, setLibraryAvailable] = useState(true);
     const [libraryUploadEnabled, setLibraryUploadEnabled] = useState(false);
     const [libraryError, setLibraryError] = useState<string | null>(null);
-    const [playlistDragging, setPlaylistDragging] = useState(false);
-    const [libraryDragging, setLibraryDragging] = useState(false);
+    const playlistUploadRef = useRef<HTMLButtonElement>(null);
+    const libraryUploadRef = useRef<HTMLButtonElement>(null);
+    const [playlistUploadFocused, setPlaylistUploadFocused] = useState(false);
+    const [libraryUploadFocused, setLibraryUploadFocused] = useState(false);
+    const [pendingPastedFiles, setPendingPastedFiles] = useState<File[] | null>(null);
+    const [libraryStatusChecked, setLibraryStatusChecked] = useState(false);
+    const [librarySearch, setLibrarySearch] = useState("");
+    const [librarySort, setLibrarySort] = useState<"newest" | "az" | "size">("newest");
+    const [libraryItemPendingDelete, setLibraryItemPendingDelete] = useState<number | null>(null);
 
     const refreshLibrary = async () => {
         setLibraryLoading(true);
@@ -822,6 +829,7 @@ export default function MusicController() {
                 setLibraryAvailable(false);
                 setLibraryUploadEnabled(false);
             }
+            setLibraryStatusChecked(true);
         } catch {
             // NUI not reachable in dev; ignore
         } finally {
@@ -832,7 +840,52 @@ export default function MusicController() {
     useEffect(() => {
         if (!isAddDialogOpen) return;
         refreshLibrary();
+        // Auto-focus the upload target so the visual cue shows immediately
+        const t = setTimeout(() => {
+            (playlistUploadRef.current || libraryUploadRef.current)?.focus();
+        }, 0);
+        return () => clearTimeout(t);
     }, [isAddDialogOpen]);
+
+    // Document-level paste handler. Browsers / CEF do not fire `paste` events
+    // on focused <button> elements, so we listen on document instead while the
+    // add-song dialog is open. We always buffer the pasted files and show the
+    // choice dialog; the dialog itself decides which options to render based on
+    // current library availability (avoids races where the user pastes before
+    // the async `library_list` status check resolves).
+    useEffect(() => {
+        if (!isAddDialogOpen) return;
+        const handler = (e: ClipboardEvent) => {
+            const files = Array.from(e.clipboardData?.files || []).filter(f =>
+                f.type.startsWith("audio/") ||
+                /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name)
+            );
+            if (files.length === 0) return;
+            e.preventDefault();
+            setPendingPastedFiles(files);
+            // Re-poll library status so the prompt reflects current reality
+            // (the dialog-open refresh may not have settled yet).
+            refreshLibrary();
+        };
+        document.addEventListener("paste", handler);
+        return () => document.removeEventListener("paste", handler);
+    }, [isAddDialogOpen]);
+
+    const handlePasteChoice = async (target: "playlist" | "library" | "both") => {
+        const files = pendingPastedFiles;
+        setPendingPastedFiles(null);
+        if (!files || files.length === 0) return;
+        if (target === "playlist" || target === "both") {
+            const session = addDialogSessionRef.current;
+            for (const file of files) await addFileToPlaylist(addDialogDeck, file);
+            if (target === "playlist" && addDialogSessionRef.current === session) {
+                setIsAddDialogOpen(false);
+            }
+        }
+        if (target === "library" || target === "both") {
+            for (const f of files) await uploadToLibrary(f);
+        }
+    };
 
     // CEF/NUI loses keyboard+mouse focus on the overlay when an OS file
     // dialog opens. When the dialog closes the window regains focus, but
@@ -848,36 +901,80 @@ export default function MusicController() {
         };
     }, []);
 
-    const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => {
-            const result = r.result as string;
-            const i = result.indexOf(",");
-            resolve(i >= 0 ? result.slice(i + 1) : result);
-        };
-        r.onerror = () => reject(r.error);
-        r.readAsDataURL(file);
-    });
-
     const uploadToLibrary = async (file: File) => {
         setLibraryUploading(true);
         setLibraryError(null);
         try {
-            const dataBase64 = await fileToBase64(file);
-            const res = await fetchNui<{ ok: boolean; item?: LibraryItem; error?: string; maxFileSizeMB?: number }>("library_upload", {
+            const mimeType = file.type || "audio/mpeg";
+            const title = deriveTitleFromUrlOrName(file.name);
+
+            // 1) Ask the server for a presigned upload URL.
+            const reqRes = await fetchNui<{
+                ok: boolean;
+                presignedUrl?: string;
+                remoteId?: string;
+                contentType?: string;
+                error?: string;
+                maxFileSizeMB?: number;
+            }>("library_upload_request", {
                 filename: file.name,
-                mimeType: file.type || "audio/mpeg",
-                dataBase64,
-                title: deriveTitleFromUrlOrName(file.name),
+                mimeType,
+                title,
+                totalBytes: file.size,
             });
-            if (res && res.ok && res.item) {
-                setLibraryItems(prev => [res.item!, ...prev]);
-            } else if (res && res.error === "too_large") {
-                setLibraryError(locale("ui_file_too_large"));
-            } else if (res && res.error === "library_full") {
-                setLibraryError(locale("ui_library_full"));
-            } else if (res && res.error === "disabled") {
-                setLibraryAvailable(false);
+            if (!reqRes?.ok || !reqRes.presignedUrl || !reqRes.remoteId) {
+                if (reqRes?.error === "too_large") setLibraryError(locale("ui_file_too_large"));
+                else if (reqRes?.error === "library_full") setLibraryError(locale("ui_library_full"));
+                else if (reqRes?.error === "disabled") setLibraryAvailable(false);
+                else setLibraryError(locale("ui_upload_failed"));
+                return;
+            }
+
+            // 2) Upload the file blob directly to Fivemanage. The presigned URL
+            // endpoint expects POST multipart/form-data (per Fivemanage docs).
+            // Bytes never transit through FiveM events.
+            const formData = new FormData();
+            formData.append("file", file, file.name);
+            const putRes = await fetch(reqRes.presignedUrl, {
+                method: "POST",
+                body: formData,
+            });
+            if (!putRes.ok) {
+                setLibraryError(locale("ui_upload_failed"));
+                return;
+            }
+
+            // Fivemanage response shape: { status: "ok", data: { id, url, originalUrl } }
+            let fmId = "";
+            let fmUrl = "";
+            try {
+                const fmJson = await putRes.json();
+                fmId = fmJson?.data?.id || "";
+                fmUrl = fmJson?.data?.url || fmJson?.data?.originalUrl || "";
+            } catch {
+                setLibraryError(locale("ui_upload_failed"));
+                return;
+            }
+            if (!fmUrl) {
+                setLibraryError(locale("ui_upload_failed"));
+                return;
+            }
+
+            // 3) Tell the server the upload finished so it can record the DB row.
+            const confirmRes = await fetchNui<{ ok: boolean; item?: LibraryItem; error?: string }>(
+                "library_upload_confirm",
+                {
+                    remoteId: reqRes.remoteId,
+                    fileId: fmId,
+                    url: fmUrl,
+                    title,
+                    filename: file.name,
+                    mimeType,
+                    fileSize: file.size,
+                }
+            );
+            if (confirmRes?.ok && confirmRes.item) {
+                setLibraryItems(prev => [confirmRes.item!, ...prev]);
             } else {
                 setLibraryError(locale("ui_upload_failed"));
             }
@@ -1325,11 +1422,13 @@ export default function MusicController() {
         return () => cancelAnimationFrame(raf);
     }, []);
 
-    // Keyboard shortcut handler: ESC/Backspace to hide controller
+    // Keyboard shortcut handler: ESC to hide controller. Backspace was
+    // intentionally removed because it would close the UI mid-typing in any
+    // input field (search, etc.).
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (
-                (e.key === "Escape" || e.key === "Esc" || e.key === "Backspace")
+                (e.key === "Escape" || e.key === "Esc")
                 && visible
             ) {
                 setVisible(false);
@@ -1607,23 +1706,31 @@ export default function MusicController() {
                 .modal {
                     width: 520px;
                     max-width: calc(100vw - 32px);
+                    max-height: calc(100vh - 48px);
                     background: #0f0f0f;
                     color: #eee;
                     border: 1px solid #333;
                     border-radius: 10px;
                     box-shadow: 0 20px 60px rgba(0,0,0,0.6);
                     padding: 16px;
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
                 }
                 .modalHeader {
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
                     margin-bottom: 12px;
+                    flex-shrink: 0;
                 }
                 .modalBody {
                     display: flex;
                     flex-direction: column;
                     gap: 12px;
+                    flex: 1 1 auto;
+                    min-height: 0;
+                    overflow: hidden;
                 }
                 .modalActions {
                     display: flex;
@@ -1969,6 +2076,72 @@ export default function MusicController() {
                             <button className="resetBtn" onClick={() => setIsAddDialogOpen(false)} aria-label={locale("ui_close_add_song_dialog")}>✕</button>
                         </div>
                         <div className="modalBody">
+                            {pendingPastedFiles && pendingPastedFiles.length > 0 ? (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                    <div style={{ fontWeight: 600, fontSize: 14 }}>
+                                        {locale("ui_paste_choice_title")}
+                                    </div>
+                                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                                        {pendingPastedFiles.length === 1
+                                            ? pendingPastedFiles[0].name
+                                            : `${pendingPastedFiles.length} ${locale("ui_paste_choice_count_suffix")}`}
+                                    </div>
+                                    {!libraryStatusChecked ? (
+                                        <div style={{ fontSize: 12, opacity: 0.7, padding: "16px 4px", textAlign: "center" }}>
+                                            {locale("ui_paste_choice_checking")}
+                                        </div>
+                                    ) : libraryAvailable && libraryUploadEnabled ? (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={() => handlePasteChoice("both")}
+                                                style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid #4a9eff", background: "rgba(74,158,255,0.10)", color: "#cfe2ff", cursor: "pointer", textAlign: "left" }}
+                                            >
+                                                <div style={{ fontWeight: 700, fontSize: 13 }}>{locale("ui_paste_choice_both")}</div>
+                                                <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>{locale("ui_paste_choice_both_desc")}</div>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handlePasteChoice("library")}
+                                                style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid #444", background: "#1c1c1c", color: "inherit", cursor: "pointer", textAlign: "left" }}
+                                            >
+                                                <div style={{ fontWeight: 600, fontSize: 13 }}>{locale("ui_paste_choice_library")}</div>
+                                                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{locale("ui_paste_choice_library_desc")}</div>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handlePasteChoice("playlist")}
+                                                style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid #444", background: "#1c1c1c", color: "inherit", cursor: "pointer", textAlign: "left" }}
+                                            >
+                                                <div style={{ fontWeight: 600, fontSize: 13 }}>{locale("ui_paste_choice_playlist")}</div>
+                                                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{locale("ui_paste_choice_playlist_desc")}</div>
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={() => handlePasteChoice("playlist")}
+                                                style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid #4a9eff", background: "rgba(74,158,255,0.10)", color: "#cfe2ff", cursor: "pointer", textAlign: "left" }}
+                                            >
+                                                <div style={{ fontWeight: 700, fontSize: 13 }}>{locale("ui_paste_choice_playlist")}</div>
+                                                <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>{locale("ui_paste_choice_playlist_desc")}</div>
+                                            </button>
+                                            <div style={{ fontSize: 11, opacity: 0.55, padding: "6px 4px 0", lineHeight: 1.4 }}>
+                                                {locale("ui_paste_choice_library_unavailable")}
+                                            </div>
+                                        </>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => setPendingPastedFiles(null)}
+                                        style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #333", background: "transparent", color: "#bbb", cursor: "pointer", textAlign: "center", marginTop: 4, fontSize: 12 }}
+                                    >
+                                        {locale("ui_paste_choice_cancel") || "Cancel"}
+                                    </button>
+                                </div>
+                            ) : (
+                            <>
                             <div className="radioRow" role="group" aria-label={locale("ui_choose_target_deck")}>
                                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                     <input
@@ -1992,128 +2165,312 @@ export default function MusicController() {
                             <hr className="divider" />
 							<div>
 								<div style={{ marginBottom: 4, opacity: 0.8 }}>{locale("ui_upload_files")}</div>
-								<div
-									tabIndex={0}
-									onDragEnter={(e) => { e.preventDefault(); setPlaylistDragging(true); }}
-									onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
-									onDragLeave={() => setPlaylistDragging(false)}
-									onDrop={async (e) => {
-										e.preventDefault();
-										setPlaylistDragging(false);
-										const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
-										if (files.length === 0) return;
-										const session = addDialogSessionRef.current;
-										for (const file of files) await addFileToPlaylist(addDialogDeck, file);
-										if (addDialogSessionRef.current === session) setIsAddDialogOpen(false);
-									}}
-									onPaste={async (e) => {
-										const files = Array.from(e.clipboardData?.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
-										if (files.length === 0) return;
-										e.preventDefault();
-										const session = addDialogSessionRef.current;
-										for (const file of files) await addFileToPlaylist(addDialogDeck, file);
-										if (addDialogSessionRef.current === session) setIsAddDialogOpen(false);
-									}}
+								<div style={{ marginBottom: 6, opacity: 0.7, fontSize: 11 }}>{locale("ui_click_then_paste_hint")}</div>
+								<button
+									type="button"
+									ref={playlistUploadRef}
+									onClick={() => playlistUploadRef.current?.focus()}
+									onFocus={() => setPlaylistUploadFocused(true)}
+									onBlur={() => setPlaylistUploadFocused(false)}
+									aria-label={playlistUploadFocused ? locale("ui_click_then_paste_focused") : locale("ui_click_then_paste")}
+									className="pasteTarget"
 									style={{
-										border: `1px dashed ${playlistDragging ? "#888" : "#444"}`,
-										background: playlistDragging ? "#222" : "transparent",
+										display: "block",
+										width: "100%",
+										border: `1px ${playlistUploadFocused ? "solid" : "dashed"} ${playlistUploadFocused ? "#4a9eff" : "#444"}`,
+										background: playlistUploadFocused ? "rgba(74,158,255,0.08)" : "transparent",
+										color: playlistUploadFocused ? "#cfe2ff" : "inherit",
 										borderRadius: 6,
 										padding: 14,
 										textAlign: "center",
 										fontSize: 12,
-										opacity: 0.85,
-										cursor: "default",
-										outline: "none",
+										fontWeight: playlistUploadFocused ? 600 : 400,
+										letterSpacing: playlistUploadFocused ? "0.06em" : "normal",
+										opacity: 0.95,
+										cursor: "pointer",
+										transition: "all 160ms ease",
 									}}
 								>
-									{locale("ui_drop_or_paste_files")}
-								</div>
+									{playlistUploadFocused ? locale("ui_click_then_paste_focused") : locale("ui_click_then_paste")}
+								</button>
 							</div>
-                            {libraryAvailable && (
+                            {libraryAvailable && (() => {
+                                const q = librarySearch.trim().toLowerCase();
+                                const filtered = libraryItems
+                                    .filter(item => !q || item.title.toLowerCase().includes(q))
+                                    .sort((a, b) => {
+                                        if (librarySort === "az") return a.title.localeCompare(b.title);
+                                        if (librarySort === "size") return (b.file_size || 0) - (a.file_size || 0);
+                                        // newest first via created_at, fallback to id desc
+                                        const at = a.created_at ? new Date(a.created_at).getTime() : a.id;
+                                        const bt = b.created_at ? new Date(b.created_at).getTime() : b.id;
+                                        return bt - at;
+                                    });
+                                const formatBytes = (n?: number) => {
+                                    if (!n || n <= 0) return "";
+                                    if (n < 1024) return `${n} B`;
+                                    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+                                    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+                                };
+                                const formatDate = (s?: string) => {
+                                    if (!s) return "";
+                                    try {
+                                        const d = new Date(s);
+                                        const now = Date.now();
+                                        const diff = now - d.getTime();
+                                        const day = 86400000;
+                                        if (diff < day) return locale("ui_library_today") || "Today";
+                                        if (diff < 2 * day) return locale("ui_library_yesterday") || "Yesterday";
+                                        if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
+                                        return d.toLocaleDateString();
+                                    } catch { return ""; }
+                                };
+                                return (
                                 <>
-                                    <hr className="divider" />
-                                    <div>
-                                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                                            <div style={{ opacity: 0.8 }}>{locale("ui_my_library")}</div>
-                                        </div>
-                                        {libraryUploadEnabled && (
-                                            <div
-                                                tabIndex={0}
-                                                onDragEnter={(e) => { if (!libraryUploading) { e.preventDefault(); setLibraryDragging(true); } }}
-                                                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = libraryUploading ? "none" : "copy"; }}
-                                                onDragLeave={() => setLibraryDragging(false)}
-                                                onDrop={async (e) => {
-                                                    e.preventDefault();
-                                                    setLibraryDragging(false);
-                                                    if (libraryUploading) return;
-                                                    const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
-                                                    for (const f of files) await uploadToLibrary(f);
-                                                }}
-                                                onPaste={async (e) => {
-                                                    if (libraryUploading) return;
-                                                    const files = Array.from(e.clipboardData?.files || []).filter(f => f.type.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|aac|opus|webm)$/i.test(f.name));
-                                                    if (files.length === 0) return;
-                                                    e.preventDefault();
-                                                    for (const f of files) await uploadToLibrary(f);
-                                                }}
+                                    <hr className="divider" style={{ flexShrink: 0 }} />
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: "1 1 auto", minHeight: 0 }}>
+                                        {/* Header row: title + count + refresh */}
+                                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                                                <div style={{ fontWeight: 600, fontSize: 13 }}>{locale("ui_my_library")}</div>
+                                                <div style={{ opacity: 0.5, fontSize: 11 }}>
+                                                    {libraryLoading
+                                                        ? "…"
+                                                        : `${filtered.length}${q || librarySort !== "newest" ? " / " + libraryItems.length : ""}`}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => refreshLibrary()}
+                                                disabled={libraryLoading}
+                                                title={locale("ui_refresh") || "Refresh"}
                                                 style={{
-                                                    border: `1px dashed ${libraryDragging ? "#888" : "#444"}`,
-                                                    background: libraryDragging ? "#222" : "transparent",
-                                                    borderRadius: 6,
-                                                    padding: 10,
-                                                    textAlign: "center",
+                                                    background: "transparent",
+                                                    border: "1px solid #333",
+                                                    color: libraryLoading ? "#555" : "#bbb",
+                                                    borderRadius: 4,
+                                                    padding: "3px 8px",
                                                     fontSize: 11,
-                                                    opacity: libraryUploading ? 0.5 : 0.85,
-                                                    marginBottom: 6,
-                                                    outline: "none",
+                                                    cursor: libraryLoading ? "default" : "pointer",
                                                 }}
                                             >
-                                                {libraryUploading ? locale("ui_uploading") : locale("ui_drop_or_paste_to_upload")}
-                                            </div>
+                                                {libraryLoading ? "…" : "↻"}
+                                            </button>
+                                        </div>
+
+                                        {/* Upload affordance */}
+                                        {libraryUploadEnabled && (
+                                            <button
+                                                type="button"
+                                                ref={libraryUploadRef}
+                                                disabled={libraryUploading}
+                                                onClick={() => libraryUploadRef.current?.focus()}
+                                                onFocus={() => setLibraryUploadFocused(true)}
+                                                onBlur={() => setLibraryUploadFocused(false)}
+                                                aria-label={libraryUploadFocused ? locale("ui_click_then_paste_focused") : locale("ui_click_then_paste")}
+                                                className="pasteTarget"
+                                                style={{
+                                                    display: "block",
+                                                    width: "100%",
+                                                    border: `1px ${libraryUploadFocused && !libraryUploading ? "solid" : "dashed"} ${libraryUploadFocused && !libraryUploading ? "#4a9eff" : "#3a3a3a"}`,
+                                                    background: libraryUploadFocused && !libraryUploading ? "rgba(74,158,255,0.10)" : "rgba(255,255,255,0.02)",
+                                                    color: libraryUploadFocused && !libraryUploading ? "#cfe2ff" : "#aaa",
+                                                    borderRadius: 6,
+                                                    padding: 9,
+                                                    textAlign: "center",
+                                                    fontSize: 11,
+                                                    fontWeight: libraryUploadFocused && !libraryUploading ? 600 : 400,
+                                                    letterSpacing: libraryUploadFocused && !libraryUploading ? "0.06em" : "normal",
+                                                    opacity: libraryUploading ? 0.5 : 1,
+                                                    cursor: libraryUploading ? "default" : "pointer",
+                                                    transition: "all 160ms ease",
+                                                }}
+                                            >
+                                                {libraryUploading
+                                                    ? locale("ui_uploading")
+                                                    : (libraryUploadFocused
+                                                        ? locale("ui_click_then_paste_focused")
+                                                        : locale("ui_click_then_paste"))}
+                                            </button>
                                         )}
+
                                         {libraryError && (
-                                            <div style={{ color: "#f87171", fontSize: 12, marginBottom: 6 }}>{libraryError}</div>
+                                            <div style={{ color: "#f87171", fontSize: 12, padding: "4px 6px", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 4 }}>{libraryError}</div>
                                         )}
-                                        <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-                                            {libraryLoading && libraryItems.length === 0 ? (
-                                                <div style={{ opacity: 0.6, fontSize: 12 }}>…</div>
-                                            ) : libraryItems.length === 0 ? (
-                                                <div style={{ opacity: 0.6, fontSize: 12 }}>{locale("ui_library_empty")}</div>
-                                            ) : (
-                                                libraryItems.map(item => (
-                                                    <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", borderBottom: "1px solid #222" }}>
-                                                        <div style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }} title={item.title}>{item.title}</div>
+
+                                        {/* Search + sort */}
+                                        {libraryItems.length > 0 && (
+                                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                                <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+                                                    <span aria-hidden="true" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "#666", fontSize: 12, pointerEvents: "none" }}>⌕</span>
+                                                    <input
+                                                        type="text"
+                                                        value={librarySearch}
+                                                        onChange={(e) => setLibrarySearch(e.target.value)}
+                                                        placeholder={locale("ui_library_search_placeholder") || "Search library…"}
+                                                        style={{
+                                                            width: "100%",
+                                                            background: "#0f0f0f",
+                                                            border: "1px solid #2a2a2a",
+                                                            borderRadius: 4,
+                                                            padding: "6px 28px 6px 24px",
+                                                            fontSize: 12,
+                                                            color: "#eee",
+                                                            outline: "none",
+                                                            boxSizing: "border-box",
+                                                        }}
+                                                    />
+                                                    {librarySearch && (
                                                         <button
-                                                            className="resetBtn"
-                                                            style={{ fontSize: 12, padding: "2px 8px" }}
-                                                            onClick={async () => {
-                                                                await addLibraryItemToPlaylist(addDialogDeck, item);
-                                                                setIsAddDialogOpen(false);
+                                                            type="button"
+                                                            onClick={() => setLibrarySearch("")}
+                                                            aria-label="Clear search"
+                                                            style={{
+                                                                position: "absolute",
+                                                                right: 6,
+                                                                top: "50%",
+                                                                transform: "translateY(-50%)",
+                                                                background: "transparent",
+                                                                border: "none",
+                                                                color: "#888",
+                                                                cursor: "pointer",
+                                                                fontSize: 12,
+                                                                padding: 2,
+                                                                lineHeight: 1,
                                                             }}
-                                                            aria-label={locale("ui_add_to_deck")}
-                                                        >
-                                                            {locale("ui_add_to_deck")}
-                                                        </button>
-                                                        <button
-                                                            className="resetBtn"
-                                                            style={{ fontSize: 12, padding: "2px 8px", color: "#f87171" }}
-                                                            onClick={() => deleteLibraryItem(item.id)}
-                                                            aria-label={locale("ui_delete")}
                                                         >
                                                             ✕
                                                         </button>
-                                                    </div>
-                                                ))
+                                                    )}
+                                                </div>
+                                                <select
+                                                    value={librarySort}
+                                                    onChange={(e) => setLibrarySort(e.target.value as "newest" | "az" | "size")}
+                                                    title={locale("ui_library_sort") || "Sort"}
+                                                    style={{
+                                                        background: "#0f0f0f",
+                                                        border: "1px solid #2a2a2a",
+                                                        borderRadius: 4,
+                                                        padding: "6px 8px",
+                                                        fontSize: 11,
+                                                        color: "#ddd",
+                                                        cursor: "pointer",
+                                                        outline: "none",
+                                                    }}
+                                                >
+                                                    <option value="newest">{locale("ui_library_sort_newest") || "Newest"}</option>
+                                                    <option value="az">{locale("ui_library_sort_az") || "A → Z"}</option>
+                                                    <option value="size">{locale("ui_library_sort_size") || "Size"}</option>
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {/* List */}
+                                        <div
+                                            className="libraryList"
+                                            style={{
+                                                flex: "1 1 0",
+                                                minHeight: 120,
+                                                maxHeight: 320,
+                                                overflowY: "auto",
+                                                overflowX: "hidden",
+                                                overscrollBehavior: "contain",
+                                                border: "1px solid #1f1f1f",
+                                                borderRadius: 6,
+                                                background: "rgba(0,0,0,0.2)",
+                                            }}
+                                        >
+                                            {libraryLoading && libraryItems.length === 0 ? (
+                                                <div style={{ padding: 24, textAlign: "center", color: "#666", fontSize: 12 }}>{locale("ui_loading") || "Loading…"}</div>
+                                            ) : libraryItems.length === 0 ? (
+                                                <div style={{ padding: 28, textAlign: "center", color: "#666" }}>
+                                                    <div style={{ fontSize: 28, marginBottom: 6, opacity: 0.4 }}>♪</div>
+                                                    <div style={{ fontSize: 12 }}>{locale("ui_library_empty")}</div>
+                                                </div>
+                                            ) : filtered.length === 0 ? (
+                                                <div style={{ padding: 24, textAlign: "center", color: "#666", fontSize: 12 }}>
+                                                    {locale("ui_library_no_results") || "No matches"}
+                                                </div>
+                                            ) : (
+                                                filtered.map((item, idx) => {
+                                                    const pendingDelete = libraryItemPendingDelete === item.id;
+                                                    const meta = [formatBytes(item.file_size), formatDate(item.created_at)].filter(Boolean).join(" · ");
+                                                    return (
+                                                        <div
+                                                            key={item.id}
+                                                            className="libraryRow"
+                                                            style={{
+                                                                display: "flex",
+                                                                alignItems: "center",
+                                                                gap: 10,
+                                                                padding: "8px 10px",
+                                                                borderBottom: idx === filtered.length - 1 ? "none" : "1px solid #181818",
+                                                                transition: "background 120ms ease",
+                                                            }}
+                                                        >
+                                                            <span aria-hidden="true" style={{ color: "#4a9eff", fontSize: 14, opacity: 0.6, width: 14, textAlign: "center", flexShrink: 0 }}>♪</span>
+                                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                                <div title={item.title} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: "#e8e8e8" }}>
+                                                                    {item.title}
+                                                                </div>
+                                                                {meta && (
+                                                                    <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>{meta}</div>
+                                                                )}
+                                                            </div>
+                                                            {pendingDelete ? (
+                                                                <>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => { deleteLibraryItem(item.id); setLibraryItemPendingDelete(null); }}
+                                                                        style={{ background: "#dc2626", color: "white", border: "none", borderRadius: 4, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}
+                                                                    >
+                                                                        {locale("ui_confirm") || "Confirm"}
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setLibraryItemPendingDelete(null)}
+                                                                        style={{ background: "transparent", color: "#aaa", border: "1px solid #333", borderRadius: 4, padding: "4px 8px", fontSize: 11, cursor: "pointer" }}
+                                                                    >
+                                                                        {locale("ui_cancel") || "Cancel"}
+                                                                    </button>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => addLibraryItemToPlaylist(addDialogDeck, item)}
+                                                                        title={locale("ui_add_to_deck")}
+                                                                        style={{ background: "#1d4ed8", color: "white", border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}
+                                                                    >
+                                                                        {locale("ui_add_to_deck")}
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setLibraryItemPendingDelete(item.id)}
+                                                                        aria-label={locale("ui_delete")}
+                                                                        title={locale("ui_delete")}
+                                                                        style={{ background: "transparent", color: "#888", border: "none", borderRadius: 4, padding: "4px 6px", fontSize: 13, cursor: "pointer", lineHeight: 1 }}
+                                                                    >
+                                                                        🗑
+                                                                    </button>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })
                                             )}
                                         </div>
                                     </div>
                                 </>
-                            )}
+                                );
+                            })()}
                             {!libraryAvailable && (
                                 <>
                                     <hr className="divider" />
                                     <div style={{ opacity: 0.6, fontSize: 12 }}>{locale("ui_library_unavailable")}</div>
                                 </>
+                            )}
+                            </>
                             )}
                         </div>
                     </div>

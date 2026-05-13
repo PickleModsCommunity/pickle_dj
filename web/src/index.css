@@ -99,3 +99,38 @@ html {
     background-color: transparent;
   }
 }
+
+.pasteTarget {
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.pasteTarget:focus,
+.pasteTarget:focus-visible,
+.pasteTarget:hover {
+  border-color: #4a9eff !important;
+  background-color: rgba(74, 158, 255, 0.1) !important;
+}
+
+.libraryRow:hover {
+  background: rgba(74, 158, 255, 0.06);
+}
+
+/* Always-visible thin scrollbar for the library list */
+.libraryList::-webkit-scrollbar {
+  width: 10px;
+}
+.libraryList::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+}
+.libraryList::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.libraryList::-webkit-scrollbar-thumb:hover {
+  background: rgba(74, 158, 255, 0.5);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
