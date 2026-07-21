@@ -1204,14 +1204,28 @@ AddEventHandler('onResourceStop', function(resource)
 end)
 
 RegisterNUICallback('setVisible', function(data, cb)
-    if not data.visible then
-        ExitDJCamera()
-        ClearPedTasks(PlayerPedId())
-        -- Note: We don't stop broadcasting when controller closes
-        -- Broadcasting continues until player leaves range of all speakers
-    end
-    SetNuiFocus(data.visible, data.visible)
+    -- Acknowledge the NUI callback immediately to prevent timeout
     cb(true)
+    
+    -- Defer SetNuiFocus and camera cleanup to next game frame to avoid
+    -- calling SetNuiFocus(false, false) while the NUI frame is still
+    -- processing its outbound POST. This prevents stuck cursor and broken
+    -- NUI focus state that blocks subsequent overlays.
+    if not data.visible then
+        CreateThread(function()
+            Wait(0)
+            ExitDJCamera()
+            ClearPedTasks(PlayerPedId())
+            SetNuiFocus(data.visible, data.visible)
+            -- Note: We don't stop broadcasting when controller closes
+            -- Broadcasting continues until player leaves range of all speakers
+        end)
+    else
+        CreateThread(function()
+            Wait(0)
+            SetNuiFocus(data.visible, data.visible)
+        end)
+    end
 end)
 
 RegisterNUICallback('updateLightControls', function(data, cb)
