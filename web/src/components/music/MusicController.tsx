@@ -890,16 +890,23 @@ export default function MusicController() {
     // CEF/NUI loses keyboard+mouse focus on the overlay when an OS file
     // dialog opens. When the dialog closes the window regains focus, but
     // SetNuiFocus state isn't automatically restored, so subsequent clicks
-    // bypass the NUI. Re-assert focus on every focus event.
+    // bypass the NUI. Re-assert focus on every focus event, but only while
+    // the controller is visible — otherwise a focus event that fires during
+    // or just after the UI close sequence would erroneously re-assert
+    // SetNuiFocus(true,true) and cause a stuck cursor.
     useEffect(() => {
-        const reassert = () => { fetchNui("keepFocus", {}).catch(() => {}); };
+        const reassert = () => {
+            if (visible) {
+                fetchNui("keepFocus", {}).catch(() => {});
+            }
+        };
         window.addEventListener("focus", reassert);
         document.addEventListener("visibilitychange", reassert);
         return () => {
             window.removeEventListener("focus", reassert);
             document.removeEventListener("visibilitychange", reassert);
         };
-    }, []);
+    }, [visible]);
 
     const uploadToLibrary = async (file: File) => {
         setLibraryUploading(true);

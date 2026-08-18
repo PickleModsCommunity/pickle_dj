@@ -187,14 +187,18 @@ export default function LightControls({ lightType, label, stationId, initialStat
     const updateControl = async (property: keyof LightControlState, value: boolean | FlashSetting | SpeedSetting | [number, number, number]) => {
         if (!stationId) return;
         
-        // Only send update to server - don't update state optimistically
-        // State will be updated when we receive the networked update from server
-        await fetchNui("updateLightControls", {
+        // Optimistically update local state immediately for instant UI feedback.
+        // The server broadcast (music:lightControlsUpdated) will reconcile if needed.
+        // Updating first means no awaited fetch is in-flight when the player closes
+        // the UI, preventing a race between pending POSTs and SetNuiFocus(false,false).
+        setState(prev => ({ ...prev, [property]: value }));
+
+        fetchNui("updateLightControls", {
             stationId,
             lightType,
             property,
             value,
-        });
+        }).catch(() => {});
     };
 
     const updateColor = (colorType: "primaryColor" | "secondaryColor", color: [number, number, number]) => {

@@ -1207,13 +1207,16 @@ RegisterNUICallback('setVisible', function(data, cb)
     -- Acknowledge the NUI callback immediately to prevent timeout
     cb(true)
     
-    -- Defer SetNuiFocus and camera cleanup to next game frame to avoid
-    -- calling SetNuiFocus(false, false) while the NUI frame is still
-    -- processing its outbound POST. This prevents stuck cursor and broken
-    -- NUI focus state that blocks subsequent overlays.
+    -- Defer SetNuiFocus and camera cleanup to give any in-flight NUI fetch
+    -- callbacks (e.g. queued light-toggle POSTs) time to complete before
+    -- asserting SetNuiFocus(false, false). Wait(0) is a single-frame defer
+    -- which is not enough when multiple fetches are queued; Wait(50) (~3 frames
+    -- at 60 fps) gives CEF's fetch queue time to drain and prevents the
+    -- stuck-cursor race that occurs when the player closes the UI while light
+    -- toggles are still in flight.
     if not data.visible then
         CreateThread(function()
-            Wait(0)
+            Wait(50)
             ExitDJCamera()
             ClearPedTasks(PlayerPedId())
             SetNuiFocus(data.visible, data.visible)
